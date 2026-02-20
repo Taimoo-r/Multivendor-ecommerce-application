@@ -2,7 +2,7 @@ import { createReducer } from "@reduxjs/toolkit";
 
 const initialState = {
   isAuthenticated: false,
-  loading: false,
+  loading: true, // start true so we wait for loadUser() on reload before redirecting
   user: null,
   error: null,
   successMessage: null,

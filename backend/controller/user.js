@@ -71,6 +71,7 @@ const createActivationToken = (user) => {
 router.post(
   "/activation",
   catchAsyncError(async (req, res, next) => {
+    console.log("Here 1")
     try {
       const { activation_token } = req.body;
       const newUser = jwt.verify(
@@ -78,6 +79,7 @@ router.post(
         process.env.ACTIVATION_SECRET
       );
 
+      console.log("Here")
       if (!newUser) {
         return next(new ErrorHandler("Invalid token", 400));
       }

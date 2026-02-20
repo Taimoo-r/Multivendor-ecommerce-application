@@ -20,7 +20,7 @@ import { backendUrl } from "../../../server";
 
 
 const ProductCard = ({ data, isEvent }) => {
-  console.log(data)
+  // console.log(data)
   
   const { wishlist } = useSelector((state) => state.wishlist);
   const { cart } = useSelector((state) => state.cart);

@@ -29,6 +29,7 @@ const Login = () => {
         { withCredentials: true }
       )
       .then((res) => {
+        console.log(res.data)
         setLoading(false);
         toast.success("Login Success!");
         navigate("/");

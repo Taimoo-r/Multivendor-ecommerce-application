@@ -19,7 +19,7 @@ app.use("/", express.static("uploads"));
 // Config
 if (process.env.NODE_ENV !== "production") {
   require("dotenv").config({
-    path: "backend/config/.env",
+    path: ".env",
   });
 }
 

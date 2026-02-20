@@ -4,21 +4,25 @@ import { useParams } from "react-router-dom";
 import { server } from '../server';
 
 const ActivationPage = () => {
-  const { url } = useParams();
-  const activation_token = url;
+  const { activation_token } = useParams();
   const [error, setError] = useState(null);
   const [success, setSuccess] = useState(false);
 
   useEffect(() => {
+    console.log("Here 2")
     if (activation_token) {
       const activationEmail = async () => {
         try {
+         
           const res = await axios.post(
             `${server}/user/activation`,
             {
               activation_token,
             },
-            { headers: { "Content-Type": "application/json" } }
+            {
+              headers: { "Content-Type": "application/json" },
+              withCredentials: true,
+            }
           );
           console.log("Server response:", res.data.message);
           setSuccess(true);
