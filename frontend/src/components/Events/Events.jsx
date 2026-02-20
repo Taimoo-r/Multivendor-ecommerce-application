@@ -1,0 +1,29 @@
+import React from "react";
+import { useSelector } from "react-redux";
+import EventCard from "./EventCard.jsx";
+import styles from "../../styles/style";
+import { productData } from "../../static/data.jsx";
+const Events = () => {
+  const { allEvents, isLoading } = useSelector((state) => state.events);
+
+  return (
+    <div>
+      {!isLoading && (
+        <div className={`${styles.section}`}>
+          <div className={`${styles.heading}`}>
+            <h1>Popular Events</h1>
+          </div>
+          <div className="w-full grid">
+            {allEvents && allEvents.length !== 0 ? (
+              <EventCard data={productData[0]} />
+            ) : (
+              <h4>No Events have!</h4>
+            )}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+};
+
+export default Events;
