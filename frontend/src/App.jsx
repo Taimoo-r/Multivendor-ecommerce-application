@@ -59,34 +59,38 @@ import {
 // import ProtectedAdminRoute from "./routes/ProtectedAdminRoute";
 import { getAllProducts } from "./redux/actions/product.js";
 import { getAllEvents } from "./redux/actions/event";
-// import { Elements } from "@stripe/react-stripe-js";
-// import { loadStripe } from "@stripe/stripe-js";
+import { Elements } from "@stripe/react-stripe-js";
+import { loadStripe } from "@stripe/stripe-js";
 
 export default function App() {
-  const [stripeApikey, setStripeApiKey] = useState("");
+  const [stripeApikey, setStripeApiKey] = useState(
+    () => import.meta.env.VITE_STRIPE_PUBLISHABLE_KEY || ""
+  );
 
-  // async function getStripeApikey() {
-  //   try {
-  //     const { data } = await axios.get(`${server}/payment/stripeapikey`);
-  //     setStripeApiKey(data.stripeApikey);
-  //   } catch (error) {
-  //     console.error("Error fetching Stripe API key:", error);
-  //   }
-  // }
+  async function getStripeApikey() {
+    const envKey = import.meta.env.VITE_STRIPE_PUBLISHABLE_KEY;
+    if (envKey) setStripeApiKey(envKey);
+    try {
+      const { data } = await axios.get(`${server}/payment/stripeapikey`);
+      if (data?.stripeApikey) setStripeApiKey(data.stripeApikey);
+    } catch {
+      if (!envKey) setStripeApiKey("");
+    }
+  }
 
   useEffect(() => {
     Store.dispatch(loadUser());
     Store.dispatch(loadSeller());
     Store.dispatch(getAllProducts());
     Store.dispatch(getAllEvents());
-    // getStripeApikey();
+    getStripeApikey();
   }, []);
 
-  // const stripePromise = stripeApikey ? loadStripe(stripeApikey) : null;
+  const stripePromise = stripeApikey ? loadStripe(stripeApikey) : null;
 
   return (
     <BrowserRouter>
-      {/* <Elements stripe={stripePromise}> */}
+      <Elements stripe={stripePromise}>
         <Routes>
           <Route path="/" element={<HomePage />} />
           <Route path="/login" element={<LoginPage />} />
@@ -322,7 +326,7 @@ export default function App() {
             }
           />  */}
         </Routes>
-      {/* </Elements> */}
+      </Elements>
       <ToastContainer
         position="top-right"
         autoClose={5000}

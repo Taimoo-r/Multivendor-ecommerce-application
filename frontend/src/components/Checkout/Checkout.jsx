@@ -16,7 +16,8 @@ const Checkout = () => {
   const [userInfo, setUserInfo] = useState(false);
   const [address1, setAddress1] = useState("");
   const [address2, setAddress2] = useState("");
-  const [zipCode, setZipCode] = useState(null);
+  const [zipCode, setZipCode] = useState("");
+  const [phoneNumber, setPhoneNumber] = useState("");
   const [couponCode, setCouponCode] = useState("");
   const [couponCodeData, setCouponCodeData] = useState(null);
   const [discountPrice, setDiscountPrice] = useState(null);
@@ -26,11 +27,15 @@ const Checkout = () => {
     window.scrollTo(0, 0);
   }, []);
 
+  useEffect(() => {
+    if (user?.phoneNumber) setPhoneNumber(user.phoneNumber);
+  }, [user?.phoneNumber]);
+
   const paymentSubmit = () => {
     if (
       address1 === "" ||
       address2 === "" ||
-      zipCode === null ||
+      zipCode === "" ||
       country === "" ||
       city === ""
     ) {
@@ -124,6 +129,8 @@ const Checkout = () => {
             setAddress2={setAddress2}
             zipCode={zipCode}
             setZipCode={setZipCode}
+            phoneNumber={phoneNumber}
+            setPhoneNumber={setPhoneNumber}
           />
         </div>
         <div className="w-full 800px:w-[35%] 800px:mt-0 mt-8">
@@ -162,6 +169,8 @@ const ShippingInfo = ({
   setAddress2,
   zipCode,
   setZipCode,
+  phoneNumber,
+  setPhoneNumber,
 }) => {
   return (
     <div className="w-full 800px:w-[95%] bg-white rounded-md p-5 pb-8">
@@ -173,7 +182,7 @@ const ShippingInfo = ({
             <label className="block pb-2">Full Name</label>
             <input
               type="text"
-              value={user && user.name}
+              value={user?.name ?? ""}
               required
               className={`${styles.input} !w-[95%]`}
             />
@@ -182,7 +191,7 @@ const ShippingInfo = ({
             <label className="block pb-2">Email Address</label>
             <input
               type="email"
-              value={user && user.email}
+              value={user?.email ?? ""}
               required
               className={`${styles.input}`}
             />
@@ -193,18 +202,22 @@ const ShippingInfo = ({
           <div className="w-[50%]">
             <label className="block pb-2">Phone Number</label>
             <input
-              type="number"
+              type="tel"
               required
-              value={user && user.phoneNumber}
+              value={phoneNumber}
+              onChange={(e) => setPhoneNumber(e.target.value)}
+              placeholder="Phone number"
               className={`${styles.input} !w-[95%]`}
             />
           </div>
           <div className="w-[50%]">
             <label className="block pb-2">Zip Code</label>
             <input
-              type="number"
+              type="text"
+              inputMode="numeric"
               value={zipCode}
               onChange={(e) => setZipCode(e.target.value)}
+              placeholder="Zip / Postal code"
               required
               className={`${styles.input}`}
             />
