@@ -2,25 +2,14 @@ import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
 import tailwindcss from "@tailwindcss/vite";
 
+// In dev, /api and /uploads are proxied to the Express server so the browser sees one
+// origin (same as production behind Nginx) and cookies just work.
 export default defineConfig({
-  plugins: [
-    tailwindcss({
-      theme: {
-        fontFamily: {
-          Roboto: ["Roboto", "sans-serif"],
-          Poppins: ["Poppins", "sans-serif"],
-        },
-        extend: {
-          screens: {
-            "400px": "400px",
-            "800px": "800px",
-            "1000px": "1050px",
-            "1100px": "1110px",
-            "1300px": "1300px",
-          },
-        },
-      },
-    }),
-    react(),
-  ],
+  plugins: [tailwindcss(), react()],
+  server: {
+    proxy: {
+      "/api": "http://localhost:8000",
+      "/uploads": "http://localhost:8000",
+    },
+  },
 });
