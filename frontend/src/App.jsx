@@ -23,6 +23,8 @@ import {
   ShopCreatePage,
   SellerActivationPage,
   ShopLoginPage,
+  ForgotPasswordPage,
+  ResetPasswordPage,
   // OrderDetailsPage,
   // TrackOrderPage,
   // UserInbox,
@@ -95,6 +97,10 @@ export default function App() {
           <Route path="/" element={<HomePage />} />
           <Route path="/login" element={<LoginPage />} />
           <Route path="/sign-up" element={<SignUpPage />} />
+          <Route path="/forgot-password" element={<ForgotPasswordPage type="user" />} />
+          <Route path="/reset-password/:token" element={<ResetPasswordPage type="user" />} />
+          <Route path="/shop-forgot-password" element={<ForgotPasswordPage type="shop" />} />
+          <Route path="/shop-reset-password/:token" element={<ResetPasswordPage type="shop" />} />
           <Route
             path="/activation/:activation_token"
             element={<ActivationPage />}

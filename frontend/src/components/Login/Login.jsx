@@ -129,12 +129,11 @@ const Login = () => {
                   <span className="ml-2 text-sm text-gray-800">Remember me</span>
                 </label>
                 <div className="text-sm">
-                  <a
-                    href=".forgot-password"
+                  <Link to="/forgot-password"
                     className="font-medium text-orange-600 hover:text-orange-500"
                   >
                     Forgot your password?
-                  </a>
+                  </Link>
                 </div>
               </div>
               <div>

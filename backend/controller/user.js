@@ -10,6 +10,7 @@ const catchAsyncError = require("../middleware/catchAsyncErrors");
 const sendMail = require("../utils/sendMail");
 const sendToken = require("../utils/jwtToken");
 const { isAuthenticated } = require("../middleware/auth");
+const passwordResetHandlers = require("../utils/passwordReset");
 
 // Create user
 router.post("/create-user", upload.single("file"), async (req, res, next) => {
@@ -39,7 +40,8 @@ router.post("/create-user", upload.single("file"), async (req, res, next) => {
     };
 
     const activationToken = createActivationToken(user);
-    const activationUrl = `http://localhost:5173/activation/${activationToken}`;
+    const frontendUrl = process.env.FRONTEND_URL || "http://localhost:5173";
+    const activationUrl = `${frontendUrl}/activation/${activationToken}`;
 
     try {
       await sendMail({
@@ -111,6 +113,11 @@ router.post(
     }
   })
 );
+
+// Forgot / reset password
+const userReset = passwordResetHandlers(User, { resetPath: "/reset-password" });
+router.post("/forgot-password", catchAsyncError(userReset.forgot));
+router.post("/reset-password/:token", catchAsyncError(userReset.reset));
 
 // // Login user
 router.post(

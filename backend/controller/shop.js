@@ -10,6 +10,7 @@ const { upload } = require("../multer");
 const catchAsyncError = require("../middleware/catchAsyncErrors");
 const ErrorHandler = require("../utils/ErrorHandler");
 const sendShopToken = require("../utils/shopToken");
+const passwordResetHandlers = require("../utils/passwordReset");
 
 // Create shop
 router.post("/create-shop", upload.single("file"), async (req, res, next) => {
@@ -43,7 +44,8 @@ router.post("/create-shop", upload.single("file"), async (req, res, next) => {
 
     const activationToken = createActivationToken(seller);
 
-    const activationUrl = `http://localhost:3000/seller/activation/${activationToken}`;
+    const frontendUrl = process.env.FRONTEND_URL || "http://localhost:5173";
+    const activationUrl = `${frontendUrl}/seller/activation/${activationToken}`;
 
     try {
       await sendMail({
@@ -164,6 +166,13 @@ router.post(
     }
   })
 );
+
+// Forgot / reset password
+const shopReset = passwordResetHandlers(Shop, {
+  resetPath: "/shop-reset-password",
+});
+router.post("/forgot-password", catchAsyncError(shopReset.forgot));
+router.post("/reset-password/:token", catchAsyncError(shopReset.reset));
 
 // Load shop
 router.get(

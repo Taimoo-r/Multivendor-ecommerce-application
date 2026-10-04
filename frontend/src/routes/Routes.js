@@ -14,6 +14,8 @@ import ProfilePage from "../pages/ProfilePage";
 import ShopCreatePage from "../pages/ShopCreatePage";
 import SellerActivationPage from "../pages/SellerActivationPage";
 import ShopLoginPage from "../pages/ShopLoginPage";
+import ForgotPasswordPage from "../pages/ForgotPasswordPage";
+import ResetPasswordPage from "../pages/ResetPasswordPage";
 // import TrackOrderPage from "../pages/TrackOrderPage";
 // import OrderDetailsPage from "../pages/OrderDetailsPage";
 // import UserInbox from "../pages/UserInbox";
@@ -35,6 +37,8 @@ export {
   ShopCreatePage,
   SellerActivationPage,
   ShopLoginPage,
+  ForgotPasswordPage,
+  ResetPasswordPage,
 //   TrackOrderPage,
 //   OrderDetailsPage,
 //   UserInbox,
