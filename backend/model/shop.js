@@ -76,8 +76,8 @@ const shopSchema = new mongoose.Schema({
 
 // Hash password
 shopSchema.pre("save", async function (next) {
-  if (!this.isModified("password")) {
-    next();
+  if (!this.isModified("password") || this.$locals.passwordHashed) {
+    return next();
   }
   this.password = await bcrypt.hash(this.password, 10);
 });

@@ -1,2 +1,5 @@
 node_modules/
-./uploads
+backend/.env
+backend/uploads/*
+!backend/uploads/.gitkeep
+frontend/dist/

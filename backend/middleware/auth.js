@@ -7,24 +7,23 @@ const Shop = require("../model/shop");
 // Middleware to authenticate regular users
 exports.isAuthenticated = catchAsyncError(async (req, res, next) => {
   const { token } = req.cookies;
-  console.log(token);
 
   if (!token) {
     return next(new ErrorHandler("Please login to continue", 401));
   }
 
+  let decoded;
   try {
-    const decoded = jwt.verify(token, process.env.JWT_SECRET_KEY);
-    req.user = await User.findById(decoded.id);
-
-    if (!req.user) {
-      return next(new ErrorHandler("User not found", 404));
-    }
-
-    next();
+    decoded = jwt.verify(token, process.env.JWT_SECRET_KEY);
   } catch (error) {
-    return next(new ErrorHandler("Invalid token", 401));
+    return next(new ErrorHandler("Your session has expired, please login again", 401));
   }
+
+  req.user = await User.findById(decoded.id);
+  if (!req.user) {
+    return next(new ErrorHandler("Please login to continue", 401));
+  }
+  next();
 });
 
 // Middleware to authenticate sellers
@@ -35,26 +34,16 @@ exports.isSeller = catchAsyncError(async (req, res, next) => {
     return next(new ErrorHandler("Please login to continue", 401));
   }
 
+  let decoded;
   try {
-    const decoded = jwt.verify(seller_token, process.env.JWT_SECRET_KEY);
-    req.seller = await Shop.findById(decoded.id);
-
-    if (!req.seller) {
-      return next(new ErrorHandler("Seller not found", 404));
-    }
-
-    next();
+    decoded = jwt.verify(seller_token, process.env.JWT_SECRET_KEY);
   } catch (error) {
-    return next(new ErrorHandler("Invalid seller token", 401));
+    return next(new ErrorHandler("Your session has expired, please login again", 401));
   }
-});
 
-// // Middleware to authenticate Admin
-// exports.isAdmin = (...roles) => {
-//   return (req,res,next) => {
-//       if(!roles.includes(req.user.role)){
-//           return next(new ErrorHandler(`${req.user.role} can not access this resources!`))
-//       };
-//       next();
-//   }
-// }
+  req.seller = await Shop.findById(decoded.id);
+  if (!req.seller) {
+    return next(new ErrorHandler("Please login to continue", 401));
+  }
+  next();
+});

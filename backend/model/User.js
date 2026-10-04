@@ -52,7 +52,7 @@ const userSchema = new mongoose.Schema({
 
 // Hash password before saving to database
 userSchema.pre("save", async function (next) {
-  if (!this.isModified("password")) {
+  if (!this.isModified("password") || this.$locals.passwordHashed) {
     return next();
   }
 

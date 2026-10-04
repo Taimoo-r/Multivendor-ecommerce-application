@@ -1,208 +1,155 @@
 const express = require("express");
-const { isSeller, isAuthenticated, isAdmin } = require("../middleware/auth");
-const catchAsyncError = require("../middleware/catchAsyncErrors");
+const fs = require("fs");
+const path = require("path");
 const router = express.Router();
-// const Order = require("../model/order");
+const { isSeller, isAuthenticated } = require("../middleware/auth");
+const catchAsyncError = require("../middleware/catchAsyncErrors");
 const Product = require("../model/product");
-const Shop = require("../model/shop");
+const Order = require("../model/order");
 const { upload } = require("../multer");
 const ErrorHandler = require("../utils/ErrorHandler");
-const fs = require("fs");
+const { publicShop, withPublicShop } = require("../utils/publicShop");
 
-// Create product
+const removeUpload = (filename) => {
+  if (!filename) return;
+  fs.unlink(path.join("uploads", filename), () => {});
+};
+
+// Create product (signed-in seller, for their own shop)
 router.post(
   "/create-product",
-  upload.array("images"),
+  isSeller,
+  upload.array("images", 6),
   catchAsyncError(async (req, res, next) => {
-    try {
-      const shopId = req.body.shopId;
-      const shop = await Shop.findById(shopId);
-      if (!shop) {
-        return next(new ErrorHandler("Shop Id is invalid!", 400));
-      } else {
-        const files = req.files;
-        const imageUrls = files.map((file) => `${file.filename}`);
-        const productData = req.body;
-        productData.images = imageUrls;
-        productData.shop = shop;
+    const files = req.files || [];
+    const { name, description, category, tags, originalPrice, discountPrice, stock } =
+      req.body;
+    const fail = (message) => {
+      files.forEach((f) => removeUpload(f.filename));
+      return next(new ErrorHandler(message, 400));
+    };
 
-        const product = await Product.create(productData);
-
-        res.status(201).json({
-          success: true,
-          product,
-        });
-      }
-    } catch (error) {
-      return next(new ErrorHandler(error.message, 400));
+    if (!name || !description || !category) {
+      return fail("Please fill in the name, description and category");
     }
+    if (files.length === 0) return fail("Please add at least one image");
+    if (!(Number(discountPrice) > 0)) return fail("Please enter a valid price");
+    if (!(Number(stock) >= 0) || stock === "" || stock === undefined) {
+      return fail("Please enter the stock quantity");
+    }
+    if (originalPrice && Number(originalPrice) < Number(discountPrice)) {
+      return fail("The original price can't be lower than the sale price");
+    }
+
+    const product = await Product.create({
+      name,
+      description,
+      category,
+      tags,
+      originalPrice: originalPrice ? Number(originalPrice) : undefined,
+      discountPrice: Number(discountPrice),
+      stock: Number(stock),
+      images: files.map((f) => f.filename),
+      shopId: String(req.seller._id),
+      shop: publicShop(req.seller),
+    });
+
+    res.status(201).json({ success: true, product });
   })
 );
 
-// get all products of a shop
+// All products of a shop
 router.get(
   "/get-all-products-shop/:id",
   catchAsyncError(async (req, res, next) => {
-    try {
-      const products = await Product.find({ shopId: req.params.id });
-
-      res.status(201).json({
-        success: true,
-        products,
-      });
-    } catch (error) {
-      return next(new ErrorHandler(error.message, 400));
-    }
+    const products = await Product.find({ shopId: req.params.id }).sort({
+      createdAt: -1,
+    });
+    res.status(200).json({ success: true, products: products.map(withPublicShop) });
   })
 );
 
-// get all products
+// All products
 router.get(
   "/get-all-products",
   catchAsyncError(async (req, res, next) => {
-    try {
-      const product = await Product.find().sort({ createdAt: -1 });
-
-      res.status(201).json({
-        success: true,
-        product,
-      });
-    } catch (error) {
-      return next(new ErrorHandler(error, 400));
-    }
+    const products = await Product.find().sort({ createdAt: -1 });
+    res.status(200).json({ success: true, product: products.map(withPublicShop) });
   })
 );
 
-// delete product of shop
+// Delete a product of the signed-in shop
 router.delete(
-    "/delete-shop-product/:id",
-    isSeller,
-    catchAsyncError(async (req, res, next) => {
-      try {
-        const productId = req.params.id;
-        const productData = await Product.findById(productId);
-  
-        if (!productData) {
-          return next(new ErrorHandler("Product not found with this id!", 404));
-        }
-  
-        //  Ownership check
-        if (productData.shopId.toString() !== req.seller._id.toString()) {
-          return next(new ErrorHandler("You are not authorized to delete this product", 403));
-        }
-  
-        
-        productData.images.forEach((imageUrls) => {
-          const filename = imageUrls;
-          const filePath = `uploads/${filename}`;
-          fs.unlink(filePath, (err) => {
-            if (err) console.log(err);
-          });
-        });
-  
-        await Product.findByIdAndDelete(productId);
-  
-        res.status(200).json({
-          success: true,
-          message: "Product deleted successfully!",
-        });
-      } catch (error) {
-        return next(new ErrorHandler(error.message, 400));
-      }
-    })
-  );
-  
+  "/delete-shop-product/:id",
+  isSeller,
+  catchAsyncError(async (req, res, next) => {
+    const product = await Product.findById(req.params.id);
+    if (!product) {
+      return next(new ErrorHandler("Product not found", 404));
+    }
+    if (String(product.shopId) !== String(req.seller._id)) {
+      return next(new ErrorHandler("You can only delete your own products", 403));
+    }
+    product.images.forEach(removeUpload);
+    await Product.findByIdAndDelete(product._id);
+    res.status(200).json({ success: true, message: "Product deleted" });
+  })
+);
 
-// // review for a product
-// router.put(
-//   "/create-new-review",
-//   isAuthenticated,
-//   catchAsyncError(async (req, res, next) => {
-//     try {
-//       const { user, rating, comment, productId, orderId } = req.body;
+// Review a product you've received. One review per buyer; reviewing again edits it.
+router.put(
+  "/create-new-review",
+  isAuthenticated,
+  catchAsyncError(async (req, res, next) => {
+    const { rating, comment, productId } = req.body;
+    const stars = Number(rating);
+    if (!(stars >= 1 && stars <= 5)) {
+      return next(new ErrorHandler("Please choose a rating from 1 to 5", 400));
+    }
 
-//       if (!req.user || !req.user._id) {
-//         return next(new ErrorHandler("User not authenticated", 401));
-//       }
+    const product = await Product.findById(productId);
+    if (!product) {
+      return next(new ErrorHandler("Product not found", 404));
+    }
 
-//       const product = await Product.findById(productId);
+    const purchased = await Order.findOne({
+      "user._id": req.user._id,
+      status: "Delivered",
+      "cart.productId": String(product._id),
+    });
+    if (!purchased) {
+      return next(
+        new ErrorHandler("You can review a product once your order has been delivered", 403)
+      );
+    }
 
-//       if (!product) {
-//         return next(new ErrorHandler("Product not found with this id!", 404));
-//       }
+    const author = {
+      _id: req.user._id,
+      name: req.user.name,
+      avatar: req.user.avatar,
+    };
+    const existing = product.reviews.find(
+      (r) => r.user && String(r.user._id) === String(req.user._id)
+    );
+    if (existing) {
+      existing.rating = stars;
+      existing.comment = comment;
+      existing.user = author;
+    } else {
+      product.reviews.push({
+        user: author,
+        rating: stars,
+        comment,
+        productId: String(product._id),
+      });
+    }
 
-//       if (!product.reviews) {
-//         product.reviews = [];
-//       }
+    const total = product.reviews.reduce((a, r) => a + r.rating, 0);
+    product.ratings = Math.round((total / product.reviews.length) * 10) / 10;
+    await product.save({ validateBeforeSave: false });
 
-//       const review = {
-//         user,
-//         rating,
-//         comment,
-//         productId,
-//       };
-
-//       const isReviewed = product.reviews.find(
-//         (rev) => rev.user && rev.user.toString() === req.user._id.toString()
-//       );
-
-//       if (isReviewed) {
-//         product.reviews.forEach((rev) => {
-//           if (rev.user && rev.user.toString() === req.user._id.toString()) {
-//             rev.rating = rating;
-//             rev.comment = comment;
-//             rev.user = user;
-//           }
-//         });
-//       } else {
-//         product.reviews.push(review);
-//       }
-
-//       let avg = 0;
-
-//       product.reviews.forEach((rev) => {
-//         avg += rev.rating;
-//       });
-
-//       product.ratings = avg / product.reviews.length;
-
-//       await product.save({ validateBeforeSave: false });
-
-//       await Order.findByIdAndUpdate(
-//         orderId,
-//         { $set: { "cart.$[elem].isReviewed": true } },
-//         { arrayFilters: [{ "elem._id": productId }], new: true }
-//       );
-
-//       res.status(200).json({
-//         success: true,
-//         message: "Reviewed successfully!",
-//       });
-//     } catch (error) {
-//       console.error("Error in review handler:", error);
-//       return next(new ErrorHandler(error.message, 400));
-//     }
-//   })
-// );
-
-// // all products --- for admin
-// router.get(
-//   "/admin-all-products",
-//   isAuthenticated,
-//   isAdmin("Admin"),
-//   catchAsyncError(async (req, res, next) => {
-//     try {
-//       const products = await Product.find().sort({
-//         createdAt: -1,
-//       });
-//       res.status(201).json({
-//         success: true,
-//         products,
-//       });
-//     } catch (error) {
-//       return next(new ErrorHandler(error.message, 500));
-//     }
-//   })
-// );
+    res.status(200).json({ success: true, message: "Thanks for your review!" });
+  })
+);
 
 module.exports = router;
