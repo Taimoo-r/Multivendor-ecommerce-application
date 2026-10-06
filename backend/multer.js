@@ -1,7 +1,7 @@
 const multer = require("multer");
 const path = require("path");
 
-const ALLOWED_EXT = new Set([".png", ".jpg", ".jpeg", ".webp", ".gif"]);
+const ALLOWED_EXT = new Set([".png", ".jpg", ".jpeg", ".webp", ".gif", ".avif"]);
 
 const storage = multer.diskStorage({
   destination: function (req, file, cb) {
@@ -24,7 +24,8 @@ const storage = multer.diskStorage({
 
 exports.upload = multer({
   storage,
-  limits: { fileSize: 5 * 1024 * 1024 },
+  limits: { fileSize: 5 * 1024 * 1024, files: 6, fields: 20 },
+  // The declared type is only a first filter; verifyImages checks the actual bytes.
   fileFilter: (req, file, cb) => {
     if (file.mimetype && file.mimetype.startsWith("image/")) return cb(null, true);
     cb(new Error("Only image files are allowed"));
