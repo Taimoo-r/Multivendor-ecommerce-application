@@ -6,11 +6,21 @@ import { imgUrl } from "../../lib/api";
 import { money, percentOff } from "../../lib/format";
 import { useLockScroll } from "../../lib/hooks";
 
-/* ---------- images ---------- */
-export const Img = ({ name, alt = "", className = "", ...rest }) => {
-  const [failed, setFailed] = useState(false);
-  useEffect(() => setFailed(false), [name]);
-  if (!name || failed) {
+/* ---------- images ----------
+ * Every upload has AVIF and WebP copies 320, 640 and 1000 px wide (made by the API).
+ * The browser picks the smallest one that covers `sizes` at the screen's pixel density.
+ * Variants are written in the background after an upload, so for a few seconds they may
+ * not exist yet: if the responsive image fails we fall back to the original file, and if
+ * that fails too, to a placeholder.
+ */
+const WIDTHS = [320, 640, 1000];
+const stem = (name) => name.replace(/\.[a-z0-9]+$/i, "");
+const srcSet = (name, fmt) => WIDTHS.map((w) => `${imgUrl(`${stem(name)}-w${w}.${fmt}`)} ${w}w`).join(", ");
+
+export const Img = ({ name, alt = "", className = "", sizes = "(min-width: 1024px) 25vw, 50vw", priority = false, ...rest }) => {
+  const [stage, setStage] = useState(0); // 0 responsive, 1 original, 2 placeholder
+  useEffect(() => setStage(0), [name]);
+  if (!name || stage > 1) {
     return (
       <div
         className={`grid place-items-center bg-surface-2 text-muted ${className}`}
@@ -25,17 +35,48 @@ export const Img = ({ name, alt = "", className = "", ...rest }) => {
       </div>
     );
   }
-  return (
+  const img = (
     <img
       src={imgUrl(name)}
       alt={alt}
-      loading="lazy"
-      onError={() => setFailed(true)}
+      loading={priority ? "eager" : "lazy"}
+      decoding="async"
+      fetchpriority={priority ? "high" : undefined}
+      onError={() => setStage((s) => s + 1)}
       className={className}
       {...rest}
     />
   );
+  if (stage === 1 || /\.gif$/i.test(name)) return img;
+  return (
+    <picture className="contents">
+      <source type="image/avif" srcSet={srcSet(name, "avif")} sizes={sizes} />
+      <source type="image/webp" srcSet={srcSet(name, "webp")} sizes={sizes} />
+      {img}
+    </picture>
+  );
 };
+
+// Static banners in public/banners, with AVIF/WebP copies made by scripts/banners.cjs
+const BANNER_WIDTHS = [480, 800, 1200];
+const bannerSet = (src, fmt) =>
+  BANNER_WIDTHS.map((w) => `${src.replace(/\.jpg$/, "")}-w${w}.${fmt} ${w}w`).join(", ");
+
+export const Banner = ({ src, sizes, className = "", style, priority = false }) => (
+  <picture className="contents">
+    <source type="image/avif" srcSet={bannerSet(src, "avif")} sizes={sizes} />
+    <source type="image/webp" srcSet={bannerSet(src, "webp")} sizes={sizes} />
+    <img
+      src={src}
+      alt=""
+      className={className}
+      style={style}
+      loading={priority ? "eager" : "lazy"}
+      decoding="async"
+      fetchpriority={priority ? "high" : undefined}
+    />
+  </picture>
+);
 
 /* ---------- ratings ---------- */
 const STAR_PATH = "M12 2.5l2.9 6.1 6.6.9-4.8 4.6 1.2 6.6L12 17.5 6.1 20.7l1.2-6.6L2.5 9.5l6.6-.9z";

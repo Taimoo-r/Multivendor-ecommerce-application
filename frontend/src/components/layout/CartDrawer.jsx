@@ -14,7 +14,7 @@ export const CartLine = ({ line, compact = false }) => {
   return (
     <div className="flex gap-4 py-4">
       <Link to={`/product/${line._id}`} className={`${img} rounded-lg bg-surface overflow-hidden shrink-0`}>
-        <Img name={line.image} alt={line.name} className="w-full h-full object-cover" />
+        <Img name={line.image} alt={line.name} sizes={compact ? "64px" : "112px"} className="w-full h-full object-cover" />
       </Link>
       <div className="flex-1 min-w-0">
         <div className="flex justify-between gap-3">

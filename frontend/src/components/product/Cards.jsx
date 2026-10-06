@@ -5,13 +5,16 @@ import { Countdown, Img, Price, Rating } from "../ui/primitives";
 import { percentOff, compact } from "../../lib/format";
 import { useAddToCart, useWishlist } from "../../lib/hooks";
 
-export const ProductCard = ({ product, kind = "Product" }) => {
+// rendered width of a product card in the grids and rows, for picking an image size
+export const CARD_SIZES = "(min-width: 1280px) 260px, (min-width: 640px) 32vw, 48vw";
+
+export const ProductCard = ({ product, kind = "Product", priority = false }) => {
   const add = useAddToCart();
   const wish = useWishlist();
   const off = percentOff(product.originalPrice, product.discountPrice);
   const soldOut = product.stock < 1;
   const liked = wish.has(product._id);
-  const reviews = product.reviews?.length || 0;
+  const reviews = product.reviewCount ?? product.reviews?.length ?? 0;
 
   return (
     <article className="group relative">
@@ -20,12 +23,15 @@ export const ProductCard = ({ product, kind = "Product" }) => {
           <Img
             name={product.images?.[0]}
             alt={product.name}
+            sizes={CARD_SIZES}
+            priority={priority}
             className={`w-full h-full object-cover transition duration-300 ${product.images?.[1] ? "group-hover:opacity-0" : "group-hover:scale-105"} ${soldOut ? "opacity-50" : ""}`}
           />
           {product.images?.[1] && (
             <Img
               name={product.images[1]}
               alt=""
+              sizes={CARD_SIZES}
               className="absolute inset-0 w-full h-full object-cover opacity-0 transition duration-300 group-hover:opacity-100"
             />
           )}
@@ -128,6 +134,7 @@ export const EventCard = ({ event }) => {
         <Img
           name={event.images?.[0]}
           alt={event.name}
+          sizes="(min-width: 1024px) 280px, (min-width: 640px) 44vw, 100vw"
           className="absolute inset-0 w-full h-full object-cover group-hover:scale-105 transition duration-500"
         />
         {off > 0 && !ended && (
@@ -191,6 +198,7 @@ export const ShopCard = ({ shop }) => (
     <Img
       name={shop.avatar}
       alt=""
+      sizes="56px"
       className="w-14 h-14 rounded-xl object-cover bg-surface shrink-0"
     />
     <div className="min-w-0">
