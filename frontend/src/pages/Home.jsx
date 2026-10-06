@@ -1,10 +1,10 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { FiArrowRight, FiCreditCard, FiHeadphones, FiRotateCcw, FiTruck } from "react-icons/fi";
-import { useCatalog, useTitle } from "../lib/hooks";
+import { useTitle } from "../lib/hooks";
 import { CATEGORIES } from "../lib/constants";
-import { percentOff } from "../lib/format";
-import { Img, SectionHead } from "../components/ui/primitives";
+import { Banner, Img, SectionHead } from "../components/ui/primitives";
+import { useGetEventsQuery, useGetHomeQuery, useGetShopsQuery } from "../store/api";
 import { EventCard, ShopCard } from "../components/product/Cards";
 import Row from "../components/product/Row";
 
@@ -44,9 +44,14 @@ const SLIDES = [
   },
 ];
 
+const HERO_SIZES = "(min-width: 1024px) 34vw, (min-width: 640px) 50vw, 100vw";
+
+// Only the visible slide is in the DOM, so the other banners are not downloaded
+// until they are shown.
 const Hero = () => {
   const [i, setI] = useState(0);
   const [paused, setPaused] = useState(false);
+  const slide = SLIDES[i];
 
   useEffect(() => {
     if (paused) return;
@@ -60,38 +65,34 @@ const Hero = () => {
       onMouseEnter={() => setPaused(true)}
       onMouseLeave={() => setPaused(false)}
     >
-      {SLIDES.map((s, idx) => (
-        <div
-          key={s.title}
-          aria-hidden={idx !== i}
-          className={`${idx === i ? "relative" : "absolute inset-0 pointer-events-none"} grid sm:grid-cols-[1fr_1.05fr] min-h-[400px] lg:min-h-[420px] transition-opacity duration-500 ${idx === i ? "opacity-100" : "opacity-0"}`}
-          style={{ background: s.bg, color: s.dark ? "#fff" : "#0a1a1c" }}
-        >
-          <div className="order-2 sm:order-1 p-6 sm:p-9 lg:p-11 flex flex-col justify-center">
-            <span className="text-xs font-bold uppercase tracking-[.14em] opacity-70">{s.eyebrow}</span>
-            <h1 className="text-3xl sm:text-4xl lg:text-[44px] font-bold mt-3 leading-[1.05]">{s.title}</h1>
-            <p className="mt-3.5 text-[15px] opacity-80 max-w-sm">{s.text}</p>
-            <div className="mt-6">
-              <Link
-                to={s.to}
-                tabIndex={idx === i ? 0 : -1}
-                className={`btn btn-lg ${s.dark ? "bg-white text-ink hover:bg-surface" : "btn-primary"}`}
-              >
-                {s.cta} <FiArrowRight />
-              </Link>
-            </div>
-          </div>
-          <div className="order-1 sm:order-2 relative h-52 sm:h-auto">
-            <img
-              src={s.img}
-              alt=""
-              className="absolute inset-0 w-full h-full object-cover"
-              style={{ objectPosition: s.pos }}
-              fetchpriority={idx === 0 ? "high" : "auto"}
-            />
+      <div
+        key={slide.title}
+        className="relative grid sm:grid-cols-[1fr_1.05fr] min-h-[400px] lg:min-h-[420px] anim-fade"
+        style={{ background: slide.bg, color: slide.dark ? "#fff" : "#0a1a1c" }}
+      >
+        <div className="order-2 sm:order-1 p-6 sm:p-9 lg:p-11 flex flex-col justify-center">
+          <span className="text-xs font-bold uppercase tracking-[.14em] opacity-70">{slide.eyebrow}</span>
+          <h1 className="text-3xl sm:text-4xl lg:text-[44px] font-bold mt-3 leading-[1.05]">{slide.title}</h1>
+          <p className="mt-3.5 text-[15px] opacity-80 max-w-sm">{slide.text}</p>
+          <div className="mt-6">
+            <Link
+              to={slide.to}
+              className={`btn btn-lg ${slide.dark ? "bg-white text-ink hover:bg-surface" : "btn-primary"}`}
+            >
+              {slide.cta} <FiArrowRight />
+            </Link>
           </div>
         </div>
-      ))}
+        <div className="order-1 sm:order-2 relative h-52 sm:h-auto">
+          <Banner
+            src={slide.img}
+            sizes={HERO_SIZES}
+            priority={i === 0}
+            className="absolute inset-0 w-full h-full object-cover"
+            style={{ objectPosition: slide.pos }}
+          />
+        </div>
+      </div>
       <div className="absolute bottom-4 left-6 sm:left-9 lg:left-11 flex gap-2 z-10">
         {SLIDES.map((s, idx) => (
           <button
@@ -110,7 +111,7 @@ const Hero = () => {
 
 const PromoTile = ({ to, img, eyebrow, title }) => (
   <Link to={to} className="relative rounded-2xl overflow-hidden block group min-h-[200px] flex-1 bg-surface-2">
-    <img src={img} alt="" className="absolute inset-0 w-full h-full object-cover group-hover:scale-105 transition duration-500" />
+    <Banner src={img} sizes="(min-width: 1024px) 30vw, 50vw" className="absolute inset-0 w-full h-full object-cover group-hover:scale-105 transition duration-500" />
     <div className="absolute inset-0 bg-ink/35" />
     <div className="relative h-full p-5 flex flex-col justify-end text-white">
       <span className="text-[11px] font-bold uppercase tracking-[.14em] opacity-80">{eyebrow}</span>
@@ -146,14 +147,13 @@ const Trust = () => {
   );
 };
 
-const CategoryCircles = ({ products }) => (
+const CategoryCircles = ({ images = {} }) => (
   <div className="grid grid-cols-4 sm:grid-cols-8 gap-x-3 gap-y-5">
     {CATEGORIES.map((c) => {
-      const sample = products.find((p) => p.category === c);
       return (
         <Link key={c} to={`/products?category=${encodeURIComponent(c)}`} className="group text-center">
           <div className="aspect-square rounded-full bg-surface overflow-hidden border border-transparent group-hover:border-ink transition">
-            <Img name={sample?.images?.[0]} alt="" className="w-full h-full object-cover group-hover:scale-105 transition duration-300" />
+            <Img name={images[c]} alt="" sizes="(min-width: 640px) 140px, 25vw" className="w-full h-full object-cover group-hover:scale-105 transition duration-300" />
           </div>
           <span className="block mt-2.5 text-xs sm:text-[13px] font-medium leading-tight">{c}</span>
         </Link>
@@ -162,8 +162,7 @@ const CategoryCircles = ({ products }) => (
   </div>
 );
 
-const CategoryTile = ({ category, products, tint, title, to }) => {
-  const p = products.find((x) => x.category === category);
+const CategoryTile = ({ image, tint, title, to }) => {
   return (
     <Link
       to={to}
@@ -175,7 +174,7 @@ const CategoryTile = ({ category, products, tint, title, to }) => {
         <span className="btn btn-primary btn-sm self-start group-hover:bg-accent">Shop now</span>
       </div>
       <div className="relative">
-        <Img name={p?.images?.[0]} alt="" className="absolute inset-0 w-full h-full object-cover mix-blend-multiply" />
+        <Img name={image} alt="" sizes="(min-width: 768px) 16vw, 50vw" className="absolute inset-0 w-full h-full object-cover mix-blend-multiply" />
       </div>
     </Link>
   );
@@ -183,20 +182,11 @@ const CategoryTile = ({ category, products, tint, title, to }) => {
 
 export default function Home() {
   useTitle("");
-  const { products, events, shops, status } = useCatalog();
-  const loading = status === "idle" || status === "loading";
-
-  const dealProducts = useMemo(
-    () =>
-      [...products]
-        .filter((p) => p.stock > 0)
-        .sort((a, b) => percentOff(b.originalPrice, b.discountPrice) - percentOff(a.originalPrice, a.discountPrice))
-        .slice(0, 12),
-    [products]
-  );
-  const best = useMemo(() => [...products].sort((a, b) => b.sold_out - a.sold_out).slice(0, 12), [products]);
-  const fresh = useMemo(() => [...products].sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt)).slice(0, 12), [products]);
-  const byCat = (c) => products.filter((p) => p.category === c).sort((a, b) => b.sold_out - a.sold_out).slice(0, 12);
+  const { data: home, isLoading: loading } = useGetHomeQuery();
+  const { data: events = [] } = useGetEventsQuery();
+  const { data: shops = [] } = useGetShopsQuery();
+  const h = home || {};
+  const img = h.categoryImages || {};
   const live = events.filter((e) => e.status === "Running").slice(0, 4);
 
   return (
@@ -223,12 +213,12 @@ export default function Home() {
 
       <section className="pt-10">
         <SectionHead title="Explore popular categories" to="/products" />
-        <CategoryCircles products={products} />
+        <CategoryCircles images={img} />
       </section>
 
       <section className="pt-14">
         <SectionHead title="Today's best deals" subtitle="The biggest discounts across the marketplace" to="/products?sort=discount" />
-        <Row products={dealProducts} loading={loading} />
+        <Row products={h.deals || []} loading={loading} />
       </section>
 
       {live.length > 0 && (
@@ -243,19 +233,19 @@ export default function Home() {
       )}
 
       <section className="pt-14 grid md:grid-cols-3 gap-4">
-        <CategoryTile category="Shoes" products={products} tint="#f1e7dc" title="Sneaker season" to="/products?category=Shoes" />
-        <CategoryTile category="Beauty & Care" products={products} tint="#e3edf5" title="The glow edit" to="/products?category=Beauty %26 Care" />
-        <CategoryTile category="Fashion" products={products} tint="#e8eee2" title="Layers for autumn" to="/products?category=Fashion" />
+        <CategoryTile image={img.Shoes} tint="#f1e7dc" title="Sneaker season" to="/products?category=Shoes" />
+        <CategoryTile image={img["Beauty & Care"]} tint="#e3edf5" title="The glow edit" to="/products?category=Beauty %26 Care" />
+        <CategoryTile image={img.Fashion} tint="#e8eee2" title="Layers for autumn" to="/products?category=Fashion" />
       </section>
 
       <section className="pt-14">
         <SectionHead title="Top in Electronics" to="/products?category=Electronics" />
-        <Row products={byCat("Electronics")} loading={loading} />
+        <Row products={h.electronics || []} loading={loading} />
       </section>
 
       <section className="pt-14">
         <SectionHead title="Style & Fashion" subtitle="Wardrobe staples and footwear" to="/products?category=Fashion" />
-        <Row products={[...byCat("Fashion"), ...byCat("Shoes")].slice(0, 12)} loading={loading} />
+        <Row products={h.style || []} loading={loading} />
       </section>
 
       <section className="pt-14">
@@ -269,17 +259,17 @@ export default function Home() {
 
       <section className="pt-14">
         <SectionHead title="Home, kitchen & coffee" to="/products?category=Home %26 Living" />
-        <Row products={[...byCat("Home & Living"), ...byCat("Kitchen & Coffee")].slice(0, 12)} loading={loading} />
+        <Row products={h.home || []} loading={loading} />
       </section>
 
       <section className="pt-14">
         <SectionHead title="Best sellers" subtitle="What everyone is buying" to="/best-selling" />
-        <Row products={best} loading={loading} />
+        <Row products={h.best || []} loading={loading} />
       </section>
 
       <section className="pt-14">
         <SectionHead title="New arrivals" to="/products?sort=new" />
-        <Row products={fresh} loading={loading} />
+        <Row products={h.fresh || []} loading={loading} />
       </section>
 
       <section className="mt-16 rounded-2xl bg-ink text-white overflow-hidden grid md:grid-cols-[1.3fr_1fr]">
@@ -295,7 +285,7 @@ export default function Home() {
           </div>
         </div>
         <div className="hidden md:block relative min-h-[260px]">
-          <img src="/banners/banner-fashion.jpg" alt="" className="absolute inset-0 w-full h-full object-cover opacity-90" />
+          <Banner src="/banners/banner-fashion.jpg" sizes="40vw" className="absolute inset-0 w-full h-full object-cover opacity-90" />
         </div>
       </section>
     </div>

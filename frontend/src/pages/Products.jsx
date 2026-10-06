@@ -1,13 +1,14 @@
 import { useMemo, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import { FiSliders, FiX, FiSearch } from "react-icons/fi";
-import { Breadcrumbs, Drawer, Empty, Stars } from "../components/ui/primitives";
+import { Breadcrumbs, Drawer, Empty, Spinner, Stars } from "../components/ui/primitives";
 import { ProductGrid, ProductSkeletons } from "../components/product/Cards";
 import { CATEGORIES } from "../lib/constants";
-import { percentOff, money } from "../lib/format";
-import { useCatalog, useTitle } from "../lib/hooks";
+import { money } from "../lib/format";
+import { useTitle } from "../lib/hooks";
+import { useGetFacetsQuery, useGetProductsInfiniteQuery, useGetShopsQuery } from "../store/api";
 
-const PAGE = 20;
+const PAGE = 24;
 // the filter sidebar takes a column, so the grid is one column narrower than full width
 const GRID = "grid-cols-2 sm:grid-cols-3 xl:grid-cols-4";
 
@@ -20,16 +21,6 @@ const SORTS = [
   ["rating", "Top rated"],
   ["discount", "Biggest discount"],
 ];
-
-const sorters = {
-  featured: (a, b) => b.sold_out + (b.ratings || 0) * 40 - (a.sold_out + (a.ratings || 0) * 40),
-  best: (a, b) => b.sold_out - a.sold_out,
-  new: (a, b) => new Date(b.createdAt) - new Date(a.createdAt),
-  "price-asc": (a, b) => a.discountPrice - b.discountPrice,
-  "price-desc": (a, b) => b.discountPrice - a.discountPrice,
-  rating: (a, b) => (b.ratings || 0) - (a.ratings || 0),
-  discount: (a, b) => percentOff(b.originalPrice, b.discountPrice) - percentOff(a.originalPrice, a.discountPrice),
-};
 
 const Group = ({ title, children }) => (
   <fieldset className="py-5 border-b border-line last:border-0">
@@ -52,10 +43,9 @@ const Check = ({ checked, onChange, children, count }) => (
 );
 
 export default function Products({ preset }) {
-  const { products, shops, status } = useCatalog();
   const [params, setParams] = useSearchParams();
   const [filtersOpen, setFiltersOpen] = useState(false);
-  const [page, setPage] = useState(1);
+  const { data: shops = [] } = useGetShopsQuery();
 
   const category = params.get("category") || "";
   const q = (params.get("q") || "").trim();
@@ -77,39 +67,30 @@ export default function Products({ preset }) {
       else next.set(k, v === true ? "1" : v);
     });
     setParams(next, { replace: true });
-    setPage(1);
   };
 
-  const base = useMemo(() => {
-    const term = q.toLowerCase();
-    return products.filter((p) => {
-      if (!term) return true;
-      return [p.name, p.category, p.tags, p.shop?.name, p.description].some(
-        (f) => f && f.toLowerCase().includes(term)
-      );
-    });
-  }, [products, q]);
+  // Filtering, sorting and paging happen on the server; the URL is the source of truth
+  // and each filter combination is its own cached result.
+  const query = useMemo(() => {
+    const q2 = { sort, limit: PAGE };
+    if (q) q2.q = q;
+    if (category) q2.category = category;
+    if (shop) q2.shop = shop;
+    if (min !== "") q2.min = min;
+    if (max !== "") q2.max = max;
+    if (rating) q2.rating = rating;
+    if (onSale) q2.sale = "1";
+    if (inStock) q2.stock = "1";
+    return q2;
+  }, [q, category, shop, min, max, rating, onSale, inStock, sort]);
 
-  const filtered = useMemo(() => {
-    const lo = min === "" ? 0 : Number(min);
-    const hi = max === "" ? Infinity : Number(max);
-    return base
-      .filter((p) => !category || p.category === category)
-      .filter((p) => !shop || p.shopId === shop)
-      .filter((p) => p.discountPrice >= lo && p.discountPrice <= hi)
-      .filter((p) => !rating || (p.ratings || 0) >= rating)
-      .filter((p) => !onSale || percentOff(p.originalPrice, p.discountPrice) > 0)
-      .filter((p) => !inStock || p.stock > 0)
-      .sort(sorters[sort] || sorters.featured);
-  }, [base, category, shop, min, max, rating, onSale, inStock, sort]);
+  const { data, isLoading, isFetching, isFetchingNextPage, hasNextPage, fetchNextPage, isError } =
+    useGetProductsInfiniteQuery(query);
+  const visible = useMemo(() => (data?.pages || []).flatMap((pg) => pg.products), [data]);
+  const total = data?.pages?.[0]?.total ?? 0;
+  const { data: catCounts = {} } = useGetFacetsQuery(q || undefined);
+  const allCount = Object.values(catCounts).reduce((a, n) => a + n, 0);
 
-  const catCounts = useMemo(() => {
-    const m = {};
-    base.forEach((p) => (m[p.category] = (m[p.category] || 0) + 1));
-    return m;
-  }, [base]);
-
-  const visible = filtered.slice(0, page * PAGE);
   const shopName = shops.find((s) => s._id === shop)?.name;
 
   const chips = [
@@ -124,7 +105,7 @@ export default function Products({ preset }) {
   const filters = (
     <div>
       <Group title="Category">
-        <Check checked={!category} onChange={() => set({ category: "" })} count={base.length}>
+        <Check checked={!category} onChange={() => set({ category: "" })} count={allCount}>
           All categories
         </Check>
         {CATEGORIES.map((c) => (
@@ -193,7 +174,7 @@ export default function Products({ preset }) {
     </div>
   );
 
-  const loading = status === "idle" || status === "loading";
+  const loading = isLoading || (isFetching && !isFetchingNextPage && visible.length === 0);
 
   return (
     <div className="container-x">
@@ -204,7 +185,7 @@ export default function Products({ preset }) {
           <h1 className="text-2xl sm:text-3xl font-bold">{title}</h1>
           {preset?.subtitle && <p className="text-slate mt-1">{preset.subtitle}</p>}
           <p className="text-sm text-slate mt-1 num">
-            {loading ? "Loading…" : `${filtered.length} ${filtered.length === 1 ? "product" : "products"}`}
+            {loading ? "Loading…" : `${total} ${total === 1 ? "product" : "products"}`}
           </p>
         </div>
         <div className="flex items-center gap-2 w-full sm:w-auto">
@@ -241,7 +222,14 @@ export default function Products({ preset }) {
         <section aria-live="polite">
           {loading ? (
             <ProductSkeletons n={8} cols={GRID} />
-          ) : filtered.length === 0 ? (
+          ) : isError ? (
+            <Empty
+              icon={<FiSearch size={24} />}
+              title="Couldn't load products"
+              text="Check your connection and try again."
+              action={<button onClick={() => window.location.reload()} className="btn btn-primary">Retry</button>}
+            />
+          ) : visible.length === 0 ? (
             <Empty
               icon={<FiSearch size={24} />}
               title="No products match"
@@ -254,14 +242,16 @@ export default function Products({ preset }) {
             />
           ) : (
             <>
-              <ProductGrid products={visible} cols={GRID} />
-              {visible.length < filtered.length && (
+              <div className={isFetching && !isFetchingNextPage ? "opacity-60 transition-opacity" : ""}>
+                <ProductGrid products={visible} cols={GRID} />
+              </div>
+              {hasNextPage && (
                 <div className="text-center mt-12">
                   <p className="text-sm text-slate mb-3 num">
-                    Showing {visible.length} of {filtered.length}
+                    Showing {visible.length} of {total}
                   </p>
-                  <button onClick={() => setPage((p) => p + 1)} className="btn btn-outline btn-lg">
-                    Show more
+                  <button onClick={() => fetchNextPage()} disabled={isFetchingNextPage} className="btn btn-outline btn-lg">
+                    {isFetchingNextPage ? <Spinner /> : "Show more"}
                   </button>
                 </div>
               )}
@@ -277,7 +267,7 @@ export default function Products({ preset }) {
         side="left"
         footer={
           <button onClick={() => setFiltersOpen(false)} className="btn btn-primary btn-block">
-            Show {filtered.length} products
+            Show {total} products
           </button>
         }
       >

@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
-import { useDispatch, useSelector } from "react-redux";
+import { useSelector } from "react-redux";
 import toast from "react-hot-toast";
 import { FaHeart } from "react-icons/fa";
 import { FiHeart, FiPackage, FiRotateCcw, FiShield, FiShoppingBag, FiTruck } from "react-icons/fi";
@@ -16,32 +16,34 @@ import {
   Stars,
 } from "../components/ui/primitives";
 import Row from "../components/product/Row";
-import { api, errMsg } from "../lib/api";
+import { errMsg } from "../lib/api";
 import { FREE_SHIPPING_OVER } from "../lib/constants";
 import { money, percentOff, timeAgo } from "../lib/format";
-import { useAddToCart, useCatalog, useItemIndex, useTitle, useWishlist } from "../lib/hooks";
-import { fetchCatalog } from "../store/catalog";
+import { useAddToCart, useTitle, useWishlist } from "../lib/hooks";
+import {
+  useAddReviewMutation,
+  useGetItemQuery,
+  useGetMyOrdersQuery,
+  useGetShopQuery,
+  useSearchProductsQuery,
+} from "../store/api";
 
 const ReviewForm = ({ product, onDone }) => {
-  const dispatch = useDispatch();
   const [rating, setRating] = useState(0);
   const [hover, setHover] = useState(0);
   const [comment, setComment] = useState("");
-  const [busy, setBusy] = useState(false);
+  const [addReview, { isLoading: busy }] = useAddReviewMutation();
 
+  // the mutation invalidates this item's cache entry, so the new review shows up by itself
   const submit = async (e) => {
     e.preventDefault();
     if (!rating) return toast.error("Please choose a star rating");
-    setBusy(true);
     try {
-      await api.put("/product/create-new-review", { productId: product._id, rating, comment });
+      await addReview({ productId: product._id, rating, comment }).unwrap();
       toast.success("Thanks for your review!");
-      await dispatch(fetchCatalog());
       onDone?.();
     } catch (err) {
       toast.error(errMsg(err));
-    } finally {
-      setBusy(false);
     }
   };
 
@@ -116,7 +118,7 @@ const Reviews = ({ product, canReview }) => {
             {reviews.map((r, i) => (
               <li key={i} className="py-5 first:pt-0">
                 <div className="flex items-center gap-3">
-                  <Img name={r.user?.avatar} alt="" className="w-9 h-9 rounded-full object-cover bg-surface" />
+                  <Img name={r.user?.avatar} alt="" sizes="36px" className="w-9 h-9 rounded-full object-cover bg-surface" />
                   <div className="min-w-0">
                     <p className="text-sm font-semibold">{r.user?.name || "Customer"}</p>
                     <p className="text-xs text-muted">Verified purchase · {timeAgo(r.createdAt)}</p>
@@ -136,17 +138,18 @@ const Reviews = ({ product, canReview }) => {
 export default function ProductDetails() {
   const { id } = useParams();
   const navigate = useNavigate();
-  const index = useItemIndex();
-  const { products, shops, status } = useCatalog();
   const user = useSelector((s) => s.auth.user);
   const add = useAddToCart();
   const wish = useWishlist();
-  const item = index.get(id);
+
+  const { data, isLoading, isError } = useGetItemQuery(id);
+  const item = useMemo(() => (data ? { ...data.item, kind: data.kind } : null), [data]);
+  const { data: shopData } = useGetShopQuery(item?.shopId, { skip: !item?.shopId });
+  const shop = shopData ? { ...shopData.shop, stats: shopData.stats } : null;
 
   const [active, setActive] = useState(0);
   const [qty, setQty] = useState(1);
   const [tab, setTab] = useState("description");
-  const [canReview, setCanReview] = useState(false);
 
   useTitle(item?.name);
   useEffect(() => {
@@ -156,34 +159,22 @@ export default function ProductDetails() {
   }, [id]);
 
   // may this buyer review it? (they need a delivered order containing it)
-  const itemId = item?._id;
-  const itemKind = item?.kind;
-  useEffect(() => {
-    setCanReview(false);
-    if (!user || !itemId || itemKind !== "Product") return;
-    api
-      .get(`/order/get-all-orders/${user._id}`)
-      .then(({ data }) =>
-        setCanReview(
-          data.orders.some((o) => o.status === "Delivered" && o.cart.some((l) => l.productId === itemId))
-        )
-      )
-      .catch(() => {});
-  }, [user, itemId, itemKind]);
-
-  const related = useMemo(
-    () =>
-      item
-        ? products
-            .filter((p) => p.category === item.category && p._id !== item._id)
-            .sort((a, b) => b.sold_out - a.sold_out)
-            .slice(0, 10)
-        : [],
-    [products, item]
+  const { data: myOrders } = useGetMyOrdersQuery(user?._id, { skip: !user || item?.kind !== "Product" });
+  const canReview = Boolean(
+    myOrders?.some((o) => o.status === "Delivered" && o.cart.some((l) => l.productId === item?._id))
   );
 
-  if (status === "idle" || status === "loading") return <PageLoader />;
-  if (!item) {
+  const { data: sameCategory } = useSearchProductsQuery(
+    { category: item?.category, sort: "best", limit: 11 },
+    { skip: !item?.category }
+  );
+  const related = useMemo(
+    () => (sameCategory?.products || []).filter((p) => p._id !== id).slice(0, 10),
+    [sameCategory, id]
+  );
+
+  if (isLoading) return <PageLoader />;
+  if (isError || !item) {
     return (
       <div className="container-x">
         <Empty
@@ -196,7 +187,6 @@ export default function ProductDetails() {
   }
 
   const isEvent = item.kind === "Event";
-  const shop = shops.find((s) => s._id === item.shopId);
   const off = percentOff(item.originalPrice, item.discountPrice);
   const soldOut = item.stock < 1;
   const live = !isEvent || item.status === "Running";
@@ -235,12 +225,18 @@ export default function ProductDetails() {
                 aria-current={active === i}
                 className={`w-[72px] h-[72px] shrink-0 rounded-lg overflow-hidden bg-surface border-2 ${active === i ? "border-ink" : "border-transparent hover:border-line"}`}
               >
-                <Img name={img} alt="" className="w-full h-full object-cover" />
+                <Img name={img} alt="" sizes="72px" className="w-full h-full object-cover" />
               </button>
             ))}
           </div>
           <div className="order-1 sm:order-2 relative aspect-square rounded-2xl overflow-hidden bg-surface">
-            <Img name={item.images?.[active]} alt={item.name} className="w-full h-full object-cover" />
+            <Img
+              name={item.images?.[active]}
+              alt={item.name}
+              sizes="(min-width: 1024px) 46vw, 100vw"
+              priority={active === 0}
+              className="w-full h-full object-cover"
+            />
             {off > 0 && !soldOut && <span className="badge bg-accent text-white absolute top-4 left-4">-{off}%</span>}
           </div>
         </div>
@@ -264,7 +260,7 @@ export default function ProductDetails() {
           <div className="flex items-center gap-2 text-sm">
             {shop && (
               <Link to={`/shop/${shop._id}`} className="inline-flex items-center gap-2 font-semibold hover:underline">
-                <Img name={shop.avatar} alt="" className="w-6 h-6 rounded-md object-cover" /> {shop.name}
+                <Img name={shop.avatar} alt="" sizes="24px" className="w-6 h-6 rounded-md object-cover" /> {shop.name}
               </Link>
             )}
             <span className="text-muted">/</span>
@@ -361,7 +357,7 @@ export default function ProductDetails() {
           {tab === "reviews" && <Reviews product={item} canReview={canReview} />}
           {tab === "seller" && shop && (
             <div className="card p-6 max-w-2xl flex gap-5 items-start">
-              <Img name={shop.avatar} alt="" className="w-20 h-20 rounded-xl object-cover bg-surface shrink-0" />
+              <Img name={shop.avatar} alt="" sizes="80px" className="w-20 h-20 rounded-xl object-cover bg-surface shrink-0" />
               <div>
                 <h3 className="text-lg font-bold">{shop.name}</h3>
                 <p className="text-sm text-slate mt-1">{shop.address}</p>

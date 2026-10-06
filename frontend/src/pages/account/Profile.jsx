@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useRef, useState } from "react";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { useDispatch, useSelector } from "react-redux";
 import toast from "react-hot-toast";
@@ -9,6 +9,7 @@ import { ORDER_STEPS } from "../../lib/constants";
 import { money, moneyExact, shortDate } from "../../lib/format";
 import { useTitle } from "../../lib/hooks";
 import { logoutUser, setUser } from "../../store/auth";
+import { useCancelOrderMutation, useGetMyOrdersQuery } from "../../store/api";
 
 /* ---------- profile ---------- */
 function ProfileTab() {
@@ -63,7 +64,7 @@ function ProfileTab() {
       <h2 className="text-xl font-bold mb-6">Profile</h2>
       <div className="flex items-center gap-5 mb-8">
         <div className="relative">
-          <Img name={user.avatar} alt="" className="w-20 h-20 rounded-full object-cover bg-surface" />
+          <Img sizes="80px" name={user.avatar} alt="" className="w-20 h-20 rounded-full object-cover bg-surface" />
           <button
             onClick={() => input.current?.click()}
             className="absolute -bottom-1 -right-1 w-8 h-8 rounded-full bg-ink text-white grid place-items-center border-2 border-white"
@@ -136,36 +137,23 @@ const Tracker = ({ order }) => {
 
 function OrdersTab() {
   const user = useSelector((s) => s.auth.user);
-  const [orders, setOrders] = useState(null);
+  const { data: orders, isError } = useGetMyOrdersQuery(user._id);
+  const [cancelOrder, { isLoading: cancellingAny, originalArgs: cancellingId }] = useCancelOrderMutation();
+  const cancelling = cancellingAny ? cancellingId : null;
   const [filter, setFilter] = useState("all");
   const [open, setOpen] = useState(null);
-  const [cancelling, setCancelling] = useState(null);
-
-  const load = useCallback(() => {
-    api
-      .get(`/order/get-all-orders/${user._id}`)
-      .then(({ data }) => setOrders(data.orders))
-      .catch((e) => {
-        toast.error(errMsg(e));
-        setOrders([]);
-      });
-  }, [user._id]);
-  useEffect(load, [load]);
 
   const cancel = async (o) => {
     if (!window.confirm(`Cancel order ${o.orderRef}?`)) return;
-    setCancelling(o._id);
     try {
-      await api.put(`/order/cancel-order/${o._id}`);
+      await cancelOrder(o._id).unwrap();
       toast.success("Order cancelled");
-      load();
     } catch (e) {
       toast.error(errMsg(e));
-    } finally {
-      setCancelling(null);
     }
   };
 
+  if (isError) return <Empty title="Couldn't load your orders" text="Refresh the page to try again." />;
   if (!orders) return <PageLoader />;
 
   const filters = [
@@ -199,7 +187,7 @@ function OrdersTab() {
                 <button onClick={() => setOpen(expanded ? null : o._id)} className="w-full text-left p-4 sm:p-5 flex flex-wrap items-center gap-x-6 gap-y-2" aria-expanded={expanded}>
                   <div className="flex -space-x-2">
                     {o.cart.slice(0, 3).map((l) => (
-                      <Img key={l.productId} name={l.image} alt="" className="w-12 h-12 rounded-lg object-cover bg-surface border-2 border-white" />
+                      <Img sizes="48px" key={l.productId} name={l.image} alt="" className="w-12 h-12 rounded-lg object-cover bg-surface border-2 border-white" />
                     ))}
                   </div>
                   <div className="min-w-0">
@@ -216,7 +204,7 @@ function OrdersTab() {
                     <ul className="divide-y divide-line border border-line rounded-xl px-4">
                       {o.cart.map((l) => (
                         <li key={l.productId} className="flex items-center gap-3 py-3">
-                          <Img name={l.image} alt="" className="w-14 h-14 rounded-lg object-cover bg-surface" />
+                          <Img sizes="56px" name={l.image} alt="" className="w-14 h-14 rounded-lg object-cover bg-surface" />
                           <div className="flex-1 min-w-0">
                             <Link to={`/product/${l.productId}`} className="text-sm font-semibold hover:underline line-clamp-2">{l.name}</Link>
                             <p className="text-xs text-slate num">{money(l.price)} × {l.qty}</p>
@@ -364,8 +352,12 @@ function SecurityTab() {
     e.preventDefault();
     setBusy(true);
     try {
-      await api.put("/user/update-user-password", form);
-      toast.success("Password updated");
+      const { data } = await api.put("/user/update-user-password", form);
+      toast.success(
+        data.signedOut
+          ? `Password updated. ${data.signedOut} other ${data.signedOut === 1 ? "session was" : "sessions were"} signed out.`
+          : "Password updated"
+      );
       setForm({ oldPassword: "", newPassword: "", confirmPassword: "" });
     } catch (err) {
       toast.error(errMsg(err));
@@ -379,7 +371,7 @@ function SecurityTab() {
       <h2 className="text-xl font-bold mb-6">Password</h2>
       <form onSubmit={save} className="space-y-4 max-w-md">
         <div><label className="label" htmlFor="op">Current password</label><input id="op" type="password" required className="field" value={form.oldPassword} onChange={set("oldPassword")} autoComplete="current-password" /></div>
-        <div><label className="label" htmlFor="np">New password</label><input id="np" type="password" required minLength={6} className="field" value={form.newPassword} onChange={set("newPassword")} autoComplete="new-password" /><p className="hint">At least 6 characters</p></div>
+        <div><label className="label" htmlFor="np">New password</label><input id="np" type="password" required minLength={8} className="field" value={form.newPassword} onChange={set("newPassword")} autoComplete="new-password" /><p className="hint">At least 8 characters</p></div>
         <div><label className="label" htmlFor="cp">Confirm new password</label><input id="cp" type="password" required className="field" value={form.confirmPassword} onChange={set("confirmPassword")} autoComplete="new-password" /></div>
         <button className="btn btn-primary" disabled={busy}>{busy ? <Spinner /> : "Update password"}</button>
       </form>

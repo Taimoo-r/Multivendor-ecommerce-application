@@ -1,14 +1,20 @@
 import { useEffect, useRef, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
-import { useDispatch, useSelector } from "react-redux";
+import { useSelector } from "react-redux";
 import toast from "react-hot-toast";
 import { FiExternalLink, FiImage, FiPlus, FiTrash2, FiX } from "react-icons/fi";
 import { Badge, Empty, Img, PageLoader, Rating, Spinner } from "../../components/ui/primitives";
-import { api, errMsg } from "../../lib/api";
+import { errMsg } from "../../lib/api";
 import { CATEGORIES } from "../../lib/constants";
 import { money, shortDate } from "../../lib/format";
-import { useCatalog } from "../../lib/hooks";
-import { fetchCatalog } from "../../store/catalog";
+import {
+  useCreateEventMutation,
+  useCreateProductMutation,
+  useDeleteEventMutation,
+  useDeleteProductMutation,
+  useGetSellerProductsQuery,
+  useGetShopEventsQuery,
+} from "../../store/api";
 
 const Head = ({ title, text, children }) => (
   <div className="flex flex-wrap items-end justify-between gap-4 mb-6">
@@ -71,34 +77,21 @@ const ImagePicker = ({ files, onChange }) => {
   );
 };
 
-const useMine = () => {
-  const { seller } = useSelector((s) => s.seller);
-  const { products, events, status } = useCatalog();
-  return {
-    seller,
-    loading: status === "idle" || status === "loading",
-    products: products.filter((p) => p.shopId === seller._id),
-    events: events.filter((e) => e.shopId === seller._id),
-  };
-};
+const useSellerId = () => useSelector((s) => s.seller.seller._id);
 
 /* ---------- products ---------- */
 export function ProductsList() {
-  const dispatch = useDispatch();
-  const { products, loading } = useMine();
-  const [deleting, setDeleting] = useState(null);
+  const { data: products = [], isLoading: loading } = useGetSellerProductsQuery(useSellerId());
+  const [deleteProduct, { isLoading: deletingAny, originalArgs: deleting }] = useDeleteProductMutation();
 
+  // the mutation invalidates this list and the public catalogue, so both refetch
   const remove = async (p) => {
     if (!window.confirm(`Delete "${p.name}"? This can't be undone.`)) return;
-    setDeleting(p._id);
     try {
-      await api.delete(`/product/delete-shop-product/${p._id}`);
+      await deleteProduct(p._id).unwrap();
       toast.success("Product deleted");
-      await dispatch(fetchCatalog());
     } catch (e) {
       toast.error(errMsg(e));
-    } finally {
-      setDeleting(null);
     }
   };
 
@@ -126,17 +119,17 @@ export function ProductsList() {
                 <tr key={p._id}>
                   <td className="px-5 py-3">
                     <div className="flex items-center gap-3 min-w-[220px]">
-                      <Img name={p.images?.[0]} alt="" className="w-11 h-11 rounded-lg object-cover bg-surface shrink-0" />
+                      <Img sizes="44px" name={p.images?.[0]} alt="" className="w-11 h-11 rounded-lg object-cover bg-surface shrink-0" />
                       <div className="min-w-0"><p className="font-semibold truncate max-w-[280px]">{p.name}</p><p className="text-xs text-muted">{p.category}</p></div>
                     </div>
                   </td>
                   <td className="px-3 py-3 num"><b>{money(p.discountPrice)}</b>{p.originalPrice > p.discountPrice && <span className="text-muted line-through ml-1.5">{money(p.originalPrice)}</span>}</td>
                   <td className="px-3 py-3 num">{p.stock === 0 ? <Badge tone="soft">Out</Badge> : p.stock <= 5 ? <Badge tone="warn">{p.stock} left</Badge> : p.stock}</td>
                   <td className="px-3 py-3 num text-slate hidden md:table-cell">{p.sold_out}</td>
-                  <td className="px-3 py-3 hidden lg:table-cell">{p.ratings ? <Rating value={p.ratings} count={p.reviews.length} /> : <span className="text-muted">–</span>}</td>
+                  <td className="px-3 py-3 hidden lg:table-cell">{p.ratings ? <Rating value={p.ratings} count={p.reviewCount} /> : <span className="text-muted">–</span>}</td>
                   <td className="px-5 py-3 text-right whitespace-nowrap">
                     <Link to={`/product/${p._id}`} className="inline-grid w-9 h-9 place-items-center rounded-lg text-muted hover:text-ink hover:bg-surface" aria-label={`View ${p.name}`}><FiExternalLink size={16} /></Link>
-                    <button onClick={() => remove(p)} disabled={deleting === p._id} className="w-9 h-9 rounded-lg text-muted hover:text-accent hover:bg-surface" aria-label={`Delete ${p.name}`}>{deleting === p._id ? <Spinner className="w-4 h-4" /> : <FiTrash2 size={16} />}</button>
+                    <button onClick={() => remove(p)} disabled={deletingAny && deleting === p._id} className="w-9 h-9 rounded-lg text-muted hover:text-accent hover:bg-surface" aria-label={`Delete ${p.name}`}>{deletingAny && deleting === p._id ? <Spinner className="w-4 h-4" /> : <FiTrash2 size={16} />}</button>
                   </td>
                 </tr>
               ))}
@@ -157,11 +150,10 @@ const Field = ({ label, id, hint, children, className = "" }) => (
 );
 
 export function CreateProduct() {
-  const dispatch = useDispatch();
   const navigate = useNavigate();
   const [form, setForm] = useState({ name: "", category: "", description: "", tags: "", originalPrice: "", discountPrice: "", stock: "" });
   const [files, setFiles] = useState([]);
-  const [busy, setBusy] = useState(false);
+  const [createProduct, { isLoading: busy }] = useCreateProductMutation();
   const set = (k) => (e) => setForm((f) => ({ ...f, [k]: e.target.value }));
 
   const submit = async (e) => {
@@ -170,18 +162,15 @@ export function CreateProduct() {
     if (form.originalPrice && Number(form.originalPrice) < Number(form.discountPrice)) {
       return toast.error("The original price can't be lower than the sale price");
     }
-    setBusy(true);
     try {
       const body = new FormData();
       Object.entries(form).forEach(([k, v]) => v !== "" && body.append(k, v));
       files.forEach((f) => body.append("images", f));
-      await api.post("/product/create-product", body);
+      await createProduct(body).unwrap();
       toast.success("Product created");
-      await dispatch(fetchCatalog());
       navigate("/dashboard/products");
     } catch (err) {
       toast.error(errMsg(err));
-      setBusy(false);
     }
   };
 
@@ -215,21 +204,16 @@ export function CreateProduct() {
 
 /* ---------- live sales ---------- */
 export function EventsList() {
-  const dispatch = useDispatch();
-  const { events, loading } = useMine();
-  const [deleting, setDeleting] = useState(null);
+  const { data: events = [], isLoading: loading } = useGetShopEventsQuery(useSellerId());
+  const [deleteEvent, { isLoading: deletingAny, originalArgs: deleting }] = useDeleteEventMutation();
 
   const remove = async (ev) => {
     if (!window.confirm(`Delete "${ev.name}"?`)) return;
-    setDeleting(ev._id);
     try {
-      await api.delete(`/event/delete-shop-event/${ev._id}`);
+      await deleteEvent(ev._id).unwrap();
       toast.success("Sale deleted");
-      await dispatch(fetchCatalog());
     } catch (e) {
       toast.error(errMsg(e));
-    } finally {
-      setDeleting(null);
     }
   };
 
@@ -246,7 +230,7 @@ export function EventsList() {
         <div className="grid md:grid-cols-2 gap-4">
           {events.map((ev) => (
             <article key={ev._id} className="card p-4 flex gap-4">
-              <Img name={ev.images?.[0]} alt="" className="w-24 h-24 rounded-xl object-cover bg-surface shrink-0" />
+              <Img sizes="96px" name={ev.images?.[0]} alt="" className="w-24 h-24 rounded-xl object-cover bg-surface shrink-0" />
               <div className="min-w-0 flex-1">
                 <div className="flex items-start justify-between gap-2">
                   <h3 className="font-bold leading-snug line-clamp-2">{ev.name}</h3>
@@ -256,7 +240,7 @@ export function EventsList() {
                 <p className="text-xs text-slate mt-1">{shortDate(ev.start_Date)} → {shortDate(ev.Finish_Date)}</p>
                 <div className="flex items-center gap-3 mt-2 text-sm">
                   <Link to={`/product/${ev._id}`} className="text-link font-semibold hover:underline">View</Link>
-                  <button onClick={() => remove(ev)} disabled={deleting === ev._id} className="text-accent font-semibold hover:underline">{deleting === ev._id ? "Deleting…" : "Delete"}</button>
+                  <button onClick={() => remove(ev)} disabled={deletingAny && deleting === ev._id} className="text-accent font-semibold hover:underline">{deletingAny && deleting === ev._id ? "Deleting…" : "Delete"}</button>
                 </div>
               </div>
             </article>
@@ -273,7 +257,6 @@ const localInput = (d) => {
 };
 
 export function CreateEvent() {
-  const dispatch = useDispatch();
   const navigate = useNavigate();
   const now = new Date();
   const [form, setForm] = useState({
@@ -281,25 +264,22 @@ export function CreateEvent() {
     start_Date: localInput(now), Finish_Date: localInput(new Date(now.getTime() + 7 * 864e5)),
   });
   const [files, setFiles] = useState([]);
-  const [busy, setBusy] = useState(false);
+  const [createEvent, { isLoading: busy }] = useCreateEventMutation();
   const set = (k) => (e) => setForm((f) => ({ ...f, [k]: e.target.value }));
 
   const submit = async (e) => {
     e.preventDefault();
     if (!files.length) return toast.error("Please add at least one image");
     if (new Date(form.Finish_Date) <= new Date(form.start_Date)) return toast.error("The sale must end after it starts");
-    setBusy(true);
     try {
       const body = new FormData();
       Object.entries(form).forEach(([k, v]) => v !== "" && body.append(k, k.endsWith("_Date") ? new Date(v).toISOString() : v));
       files.forEach((f) => body.append("images", f));
-      await api.post("/event/create-event", body);
+      await createEvent(body).unwrap();
       toast.success("Sale created");
-      await dispatch(fetchCatalog());
       navigate("/dashboard/events");
     } catch (err) {
       toast.error(errMsg(err));
-      setBusy(false);
     }
   };
 

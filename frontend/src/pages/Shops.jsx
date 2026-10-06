@@ -1,16 +1,21 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import { FiMapPin, FiStar } from "react-icons/fi";
-import { Breadcrumbs, Empty, Img, PageLoader } from "../components/ui/primitives";
-import { EventCard, ProductGrid, ShopCard } from "../components/product/Cards";
-import { api } from "../lib/api";
+import { Breadcrumbs, Empty, Img, PageLoader, Spinner } from "../components/ui/primitives";
+import { EventCard, ProductGrid, ProductSkeletons } from "../components/product/Cards";
 import { shortDate } from "../lib/format";
-import { useCatalog, useTitle } from "../lib/hooks";
+import { useTitle } from "../lib/hooks";
+import {
+  useGetProductsInfiniteQuery,
+  useGetShopEventsQuery,
+  useGetShopQuery,
+  useGetShopReviewsQuery,
+  useGetShopsQuery,
+} from "../store/api";
 
 export function Shops() {
   useTitle("Brand stores");
-  const { shops, status } = useCatalog();
-  const loading = status === "idle" || status === "loading";
+  const { data: shops = [], isLoading: loading } = useGetShopsQuery();
 
   return (
     <div className="container-x">
@@ -28,7 +33,7 @@ export function Shops() {
           {shops.map((s) => (
             <Link key={s._id} to={`/shop/${s._id}`} className="card p-5 hover:border-ink transition group flex flex-col">
               <div className="flex items-center gap-4">
-                <Img name={s.avatar} alt="" className="w-16 h-16 rounded-xl object-cover bg-surface" />
+                <Img name={s.avatar} alt="" sizes="64px" className="w-16 h-16 rounded-xl object-cover bg-surface" />
                 <div className="min-w-0">
                   <h2 className="font-bold text-lg truncate group-hover:underline">{s.name}</h2>
                   <p className="text-xs text-slate flex items-center gap-1 truncate"><FiMapPin size={12} /> {s.address}</p>
@@ -52,48 +57,36 @@ export function Shops() {
 
 export function ShopPage() {
   const { id } = useParams();
-  const { products, events, shops, status } = useCatalog();
   const [tab, setTab] = useState("products");
-  const [shop, setShop] = useState(null);
-  const [missing, setMissing] = useState(false);
+  const { data, isLoading, isError } = useGetShopQuery(id);
+  const shop = data ? { ...data.shop, stats: data.stats } : null;
 
-  // prefer the catalogue copy; fall back to the API for direct links before it loads
-  const fromCatalog = shops.find((s) => s._id === id);
-  useEffect(() => {
-    setMissing(false);
-    if (fromCatalog) return setShop(fromCatalog);
-    if (status === "idle" || status === "loading") return;
-    api
-      .get(`/shop/get-shop-info/${id}`)
-      .then(({ data }) => setShop({ ...data.shop, stats: data.stats }))
-      .catch(() => setMissing(true));
-  }, [id, fromCatalog, status]);
+  // each tab loads its own data, and only once it is opened (except the default one)
+  const products = useGetProductsInfiniteQuery({ shop: id, sort: "best", limit: 24 });
+  const mine = useMemo(() => (products.data?.pages || []).flatMap((pg) => pg.products), [products.data]);
+  const { data: shopEvents = [] } = useGetShopEventsQuery(id);
+  const sales = shopEvents.filter((e) => e.status !== "Ended");
+  const { data: shopReviews = [] } = useGetShopReviewsQuery(id, { skip: tab !== "reviews" });
+  const reviews = shopReviews.map((r) => ({ ...r.review, product: r.product }));
 
   useTitle(shop?.name);
   useResetTab(id, setTab);
 
-  if (missing) {
+  if (isError) {
     return (
       <div className="container-x">
         <Empty title="Shop not found" action={<Link to="/shops" className="btn btn-primary">All brand stores</Link>} />
       </div>
     );
   }
-  if (!shop) return <PageLoader />;
-
-  const mine = products.filter((p) => p.shopId === id);
-  const sales = events.filter((e) => e.shopId === id && e.status !== "Ended");
-  const reviews = mine
-    .flatMap((p) => (p.reviews || []).map((r) => ({ ...r, product: p })))
-    .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt))
-    .slice(0, 12);
+  if (isLoading || !shop) return <PageLoader />;
 
   return (
     <div className="container-x">
       <Breadcrumbs items={[{ label: "Home", to: "/" }, { label: "Brand stores", to: "/shops" }, { label: shop.name }]} />
 
       <header className="card p-6 sm:p-8 flex flex-col sm:flex-row gap-6 sm:items-center">
-        <Img name={shop.avatar} alt="" className="w-24 h-24 rounded-2xl object-cover bg-surface shrink-0" />
+        <Img name={shop.avatar} alt="" sizes="96px" priority className="w-24 h-24 rounded-2xl object-cover bg-surface shrink-0" />
         <div className="flex-1 min-w-0">
           <h1 className="text-2xl sm:text-3xl font-bold">{shop.name}</h1>
           <p className="text-sm text-slate flex items-center gap-1.5 mt-1"><FiMapPin size={14} /> {shop.address}</p>
@@ -108,7 +101,7 @@ export function ShopPage() {
 
       <div role="tablist" className="flex gap-7 border-b border-line mt-8 overflow-x-auto no-scrollbar">
         {[
-          ["products", `Products (${mine.length})`],
+          ["products", `Products (${shop.stats?.products ?? mine.length})`],
           ["sales", `Live sales (${sales.length})`],
           ["reviews", "Reviews"],
           ["about", "About"],
@@ -127,7 +120,22 @@ export function ShopPage() {
 
       <div className="py-8">
         {tab === "products" &&
-          (mine.length ? <ProductGrid products={mine} /> : <Empty title="No products yet" text="This shop hasn't listed anything." />)}
+          (products.isLoading ? (
+            <ProductSkeletons n={5} />
+          ) : mine.length ? (
+            <>
+              <ProductGrid products={mine} />
+              {products.hasNextPage && (
+                <div className="text-center mt-10">
+                  <button onClick={() => products.fetchNextPage()} disabled={products.isFetchingNextPage} className="btn btn-outline btn-lg">
+                    {products.isFetchingNextPage ? <Spinner /> : "Show more"}
+                  </button>
+                </div>
+              )}
+            </>
+          ) : (
+            <Empty title="No products yet" text="This shop hasn't listed anything." />
+          ))}
         {tab === "sales" &&
           (sales.length ? (
             <div className="grid lg:grid-cols-2 gap-4">{sales.map((e) => <EventCard key={e._id} event={e} />)}</div>
@@ -140,7 +148,7 @@ export function ShopPage() {
               {reviews.map((r, i) => (
                 <li key={i} className="card p-5">
                   <div className="flex items-center gap-3">
-                    <Img name={r.user?.avatar} alt="" className="w-9 h-9 rounded-full object-cover bg-surface" />
+                    <Img name={r.user?.avatar} alt="" sizes="36px" className="w-9 h-9 rounded-full object-cover bg-surface" />
                     <div className="min-w-0">
                       <p className="text-sm font-semibold">{r.user?.name}</p>
                       <p className="text-xs text-muted">{shortDate(r.createdAt)}</p>

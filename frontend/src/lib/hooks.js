@@ -3,33 +3,29 @@ import { useDispatch, useSelector } from "react-redux";
 import toast from "react-hot-toast";
 import { addItem, openCart, toCartItem, toggleWish } from "../store/cart";
 import { FREE_SHIPPING_OVER, SHIPPING_FLAT } from "./constants";
+import { useLookupQuery } from "../store/api";
 
-export const useCatalog = () => useSelector((s) => s.catalog);
-
-// products + running events by id, for live price/stock lookups
-export const useItemIndex = () => {
-  const { products, events } = useCatalog();
-  return useMemo(() => {
-    const map = new Map();
-    products.forEach((p) => map.set(p._id, { ...p, kind: "Product" }));
-    events.forEach((e) => map.set(e._id, { ...e, kind: "Event" }));
-    return map;
-  }, [products, events]);
+// Live price and stock for a list of ids (cart, wishlist), from GET /product/lookup.
+export const useLiveItems = (ids) => {
+  const key = useMemo(() => [...new Set(ids)].sort(), [ids]);
+  const { data, isSuccess, isFetching } = useLookupQuery(key, { skip: key.length === 0 });
+  const index = useMemo(() => new Map((data || []).map((i) => [i._id, i])), [data]);
+  return { index, ready: key.length === 0 || isSuccess, isFetching };
 };
 
 // Cart lines with live data merged in, plus totals. Shipping here is an estimate;
 // checkout asks the server for the exact figures.
 export const useCart = () => {
   const items = useSelector((s) => s.cart.items);
-  const { status } = useCatalog();
-  const index = useItemIndex();
+  const ids = useMemo(() => items.map((i) => i._id), [items]);
+  const { index, ready } = useLiveItems(ids);
 
   return useMemo(() => {
     const lines = items.map((i) => {
       const live = index.get(i._id);
       const price = live ? live.discountPrice : i.price;
       const stock = live ? live.stock : i.stock;
-      const gone = status === "ready" && !live;
+      const gone = ready && !live;
       const ended = live?.kind === "Event" && live.status !== "Running";
       return {
         ...i,
@@ -60,7 +56,7 @@ export const useCart = () => {
       shipping,
       total: subTotal + shipping,
     };
-  }, [items, index, status]);
+  }, [items, index, ready]);
 };
 
 export const useAddToCart = () => {

@@ -2,15 +2,15 @@ import { useState } from "react";
 import { Link } from "react-router-dom";
 import { FiChevronDown, FiHeart } from "react-icons/fi";
 import { Breadcrumbs, Empty } from "../components/ui/primitives";
-import { ProductGrid } from "../components/product/Cards";
+import { ProductGrid, ProductSkeletons } from "../components/product/Cards";
 import { FAQ as FAQ_ITEMS } from "../lib/constants";
-import { useCatalog, useTitle, useWishlist } from "../lib/hooks";
+import { useLiveItems, useTitle, useWishlist } from "../lib/hooks";
 
 export function Wishlist() {
   useTitle("Wishlist");
-  const { products } = useCatalog();
   const { ids } = useWishlist();
-  const saved = ids.map((id) => products.find((p) => p._id === id)).filter(Boolean);
+  const { index, ready } = useLiveItems(ids);
+  const saved = ids.map((id) => index.get(id)).filter(Boolean);
 
   return (
     <div className="container-x">
@@ -18,7 +18,9 @@ export function Wishlist() {
       <h1 className="text-2xl sm:text-3xl font-bold pb-6">
         Wishlist <span className="text-slate font-medium num">({saved.length})</span>
       </h1>
-      {saved.length === 0 ? (
+      {!ready ? (
+        <ProductSkeletons n={Math.min(ids.length, 5)} />
+      ) : saved.length === 0 ? (
         <Empty
           icon={<FiHeart size={24} />}
           title="Nothing saved yet"

@@ -6,7 +6,7 @@ import { Img } from "../components/ui/primitives";
 import { money, moneyExact } from "../lib/format";
 import { useTitle } from "../lib/hooks";
 import { clearCart } from "../store/cart";
-import { fetchCatalog } from "../store/catalog";
+import { vzApi } from "../store/api";
 
 export default function OrderSuccess() {
   useTitle("Order confirmed");
@@ -18,7 +18,8 @@ export default function OrderSuccess() {
   useEffect(() => {
     if (!placed) return;
     dispatch(clearCart());
-    dispatch(fetchCatalog());
+    // stock and sold counts changed: drop cached catalogue data
+    dispatch(vzApi.util.invalidateTags(["Catalog", "Item", "Events", "Orders"]));
   }, [placed, dispatch]);
 
   if (!placed) return <Navigate to="/profile?tab=orders" replace />;
@@ -47,7 +48,7 @@ export default function OrderSuccess() {
               <ul className="px-5 divide-y divide-line">
                 {o.cart.map((l) => (
                   <li key={l.productId} className="flex items-center gap-3 py-3">
-                    <Img name={l.image} alt="" className="w-12 h-12 rounded-lg object-cover bg-surface" />
+                    <Img sizes="48px" name={l.image} alt="" className="w-12 h-12 rounded-lg object-cover bg-surface" />
                     <span className="flex-1 min-w-0 text-sm font-medium line-clamp-1">{l.name}</span>
                     <span className="text-sm text-slate num">×{l.qty}</span>
                     <span className="text-sm font-semibold num w-20 text-right">{money(l.price * l.qty)}</span>

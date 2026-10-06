@@ -1,14 +1,24 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import { useDispatch, useSelector } from "react-redux";
 import toast from "react-hot-toast";
+import { useVirtualizer } from "@tanstack/react-virtual";
 import { FiAlertCircle, FiCamera, FiPlus, FiTrash2 } from "react-icons/fi";
 import { Empty, Img, Modal, PageLoader, Spinner, StatusBadge } from "../../components/ui/primitives";
 import { api, errMsg } from "../../lib/api";
 import { ORDER_STEPS } from "../../lib/constants";
 import { compact, money, moneyExact, shortDate } from "../../lib/format";
-import { useCatalog } from "../../lib/hooks";
 import { setSeller } from "../../store/auth";
+import {
+  vzApi,
+  useCreateCouponMutation,
+  useDeleteCouponMutation,
+  useGetCouponsQuery,
+  useGetSellerOrdersInfiniteQuery,
+  useGetSellerProductsQuery,
+  useGetSellerStatsQuery,
+  useUpdateOrderStatusMutation,
+} from "../../store/api";
 
 const Head = ({ title, text, children }) => (
   <div className="flex flex-wrap items-end justify-between gap-4 mb-6">
@@ -59,15 +69,12 @@ const RevenueChart = ({ months }) => {
 
 export function Overview() {
   const { seller } = useSelector((s) => s.seller);
-  const { products } = useCatalog();
-  const [stats, setStats] = useState(null);
+  const { data: products = [] } = useGetSellerProductsQuery(seller._id);
+  const { data: stats, isError } = useGetSellerStatsQuery();
 
-  useEffect(() => {
-    api.get("/order/seller-stats").then(({ data }) => setStats(data.stats)).catch((e) => toast.error(errMsg(e)));
-  }, []);
-
+  if (isError) return <Empty title="Couldn't load your dashboard" text="Refresh the page to try again." />;
   if (!stats) return <PageLoader />;
-  const low = products.filter((p) => p.shopId === seller._id && p.stock <= 5).sort((a, b) => a.stock - b.stock);
+  const low = products.filter((p) => p.stock <= 5).sort((a, b) => a.stock - b.stock);
 
   return (
     <div>
@@ -101,7 +108,7 @@ export function Overview() {
             <ul className="space-y-2">
               {low.slice(0, 4).map((p) => (
                 <li key={p._id} className="flex items-center gap-3 text-sm">
-                  <Img name={p.images?.[0]} alt="" className="w-9 h-9 rounded-md object-cover bg-surface" />
+                  <Img sizes="36px" name={p.images?.[0]} alt="" className="w-9 h-9 rounded-md object-cover bg-surface" />
                   <span className="flex-1 truncate">{p.name}</span>
                   <span className={`font-bold num ${p.stock === 0 ? "text-accent" : "text-warn"}`}>{p.stock} left</span>
                 </li>
@@ -156,54 +163,125 @@ function OrdersTable({ orders, onOpen }) {
   );
 }
 
+/*
+ * All of a shop's orders in one scrolling list. Only the rows in view (plus a few above
+ * and below) are in the DOM, so 5,000 orders cost the same to render as 20. Pages of 50
+ * are fetched with a cursor as the user scrolls near the end.
+ */
+const ROW = 57;
+const COLS = "grid grid-cols-[1fr_auto_auto] sm:grid-cols-[1.1fr_1.4fr_1fr_1fr_.9fr] items-center gap-x-3";
+
+function VirtualOrders({ orders, total, hasMore, loadingMore, loadMore, onOpen }) {
+  const scroller = useRef(null);
+  const rows = useVirtualizer({
+    count: hasMore ? orders.length + 1 : orders.length, // +1: a loading row at the end
+    getScrollElement: () => scroller.current,
+    estimateSize: () => ROW,
+    overscan: 10,
+  });
+  const items = rows.getVirtualItems();
+  const lastIndex = items.length ? items[items.length - 1].index : -1;
+
+  useEffect(() => {
+    if (lastIndex >= orders.length - 1 && hasMore && !loadingMore) loadMore();
+  }, [lastIndex, orders.length, hasMore, loadingMore, loadMore]);
+
+  if (!orders.length) return <p className="px-5 py-6 text-sm text-slate">No orders here.</p>;
+  return (
+    <div role="table" aria-rowcount={total ?? orders.length} className="text-sm">
+      <div role="row" className={`${COLS} px-5 py-2.5 text-xs text-muted font-semibold border-b border-line bg-surface/60`}>
+        <span role="columnheader">Order</span>
+        <span role="columnheader" className="hidden sm:block">Customer</span>
+        <span role="columnheader" className="hidden sm:block">Date</span>
+        <span role="columnheader">Status</span>
+        <span role="columnheader" className="text-right">Total</span>
+      </div>
+      <div ref={scroller} className="max-h-[68vh] overflow-y-auto" role="rowgroup">
+        <div style={{ height: rows.getTotalSize(), position: "relative" }}>
+          {items.map((row) => {
+            const o = orders[row.index];
+            return (
+              <div
+                key={row.key}
+                role="row"
+                aria-rowindex={row.index + 2}
+                onClick={o ? () => onOpen(o) : undefined}
+                className={`${COLS} absolute left-0 top-0 w-full px-5 border-b border-line ${o ? "cursor-pointer hover:bg-surface/70" : ""}`}
+                style={{ height: row.size, transform: `translateY(${row.start}px)` }}
+              >
+                {o ? (
+                  <>
+                    <span role="cell" className="font-semibold num whitespace-nowrap min-w-0">
+                      {o.orderRef}
+                      <span className="block sm:hidden text-xs font-normal text-slate truncate">{o.user?.name}</span>
+                    </span>
+                    <span role="cell" className="hidden sm:block truncate">{o.user?.name}</span>
+                    <span role="cell" className="hidden sm:block text-slate">{shortDate(o.createdAt)}</span>
+                    <span role="cell"><StatusBadge status={o.status} /></span>
+                    <span role="cell" className="text-right font-semibold num whitespace-nowrap">{moneyExact(o.totalPrice)}</span>
+                  </>
+                ) : (
+                  <span role="cell" className="col-span-full flex justify-center text-slate"><Spinner className="w-4 h-4" /></span>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+const FILTERS = [["all", "All"], ["open", "Open"], ["Delivered", "Delivered"], ["Cancelled", "Cancelled"]];
+
 export function Orders() {
   const { seller } = useSelector((s) => s.seller);
-  const [orders, setOrders] = useState(null);
   const [filter, setFilter] = useState("all");
-  const [selected, setSelected] = useState(null);
-  const [busy, setBusy] = useState(false);
+  const [selectedId, setSelectedId] = useState(null);
+  const { data, isLoading, hasNextPage, isFetchingNextPage, fetchNextPage } = useGetSellerOrdersInfiniteQuery({
+    shopId: seller._id,
+    status: filter === "all" ? undefined : filter,
+  });
+  const orders = useMemo(() => (data?.pages || []).flatMap((pg) => pg.orders), [data]);
+  const total = data?.pages?.[0]?.total;
+  const selected = orders.find((o) => o._id === selectedId) || null;
+  const setSelected = (o) => setSelectedId(o ? o._id : null);
+  const [updateStatus, { isLoading: busy }] = useUpdateOrderStatusMutation();
 
-  const load = useCallback(
-    () =>
-      api
-        .get(`/order/get-seller-all-orders/${seller._id}`)
-        .then(({ data }) => {
-          setOrders(data.orders);
-          setSelected((s) => (s ? data.orders.find((o) => o._id === s._id) || null : s));
-        })
-        .catch((e) => toast.error(errMsg(e))),
-    [seller._id]
-  );
-  useEffect(() => {
-    load();
-  }, [load]);
-
+  // the mutation patches the order inside the cached pages, so the row and modal update in place
   const update = async (order, status) => {
-    setBusy(true);
     try {
-      await api.put(`/order/update-order-status/${order._id}`, { status });
+      await updateStatus({ id: order._id, status }).unwrap();
       toast.success(`Marked as ${status.toLowerCase()}`);
-      await load();
     } catch (e) {
       toast.error(errMsg(e));
-    } finally {
-      setBusy(false);
     }
   };
 
-  if (!orders) return <PageLoader />;
-  const shown = orders.filter((o) => filter === "all" || (filter === "open" ? !["Delivered", "Cancelled"].includes(o.status) : o.status === filter));
   const next = (o) => ORDER_STEPS[ORDER_STEPS.indexOf(o.status) + 1];
 
   return (
     <div>
-      <Head title="Orders" text={`${orders.length} orders in total`} />
+      <Head title="Orders" text={total === undefined ? "Loading…" : `${total} ${filter === "all" ? "orders in total" : "orders"}`} />
       <div className="flex gap-2 mb-4 overflow-x-auto no-scrollbar">
-        {[["all", "All"], ["open", "Open"], ["Delivered", "Delivered"], ["Cancelled", "Cancelled"]].map(([k, l]) => (
+        {FILTERS.map(([k, l]) => (
           <button key={k} onClick={() => setFilter(k)} className={`h-9 px-4 rounded-full text-sm font-semibold whitespace-nowrap border ${filter === k ? "bg-ink text-white border-ink" : "bg-white border-line hover:border-ink"}`}>{l}</button>
         ))}
       </div>
-      <div className="card overflow-hidden"><OrdersTable orders={shown} onOpen={setSelected} /></div>
+      <div className="card overflow-hidden">
+        {isLoading ? (
+          <div className="py-16 grid place-items-center text-slate"><Spinner /></div>
+        ) : (
+          <VirtualOrders
+            orders={orders}
+            total={total}
+            hasMore={hasNextPage}
+            loadingMore={isFetchingNextPage}
+            loadMore={fetchNextPage}
+            onOpen={setSelected}
+          />
+        )}
+      </div>
 
       <Modal open={!!selected} onClose={() => setSelected(null)} title={selected ? `Order ${selected.orderRef}` : ""} wide>
         {selected && (
@@ -215,7 +293,7 @@ export function Orders() {
             <ul className="divide-y divide-line border border-line rounded-xl px-4">
               {selected.cart.map((l) => (
                 <li key={l.productId} className="flex items-center gap-3 py-3">
-                  <Img name={l.image} alt="" className="w-12 h-12 rounded-lg object-cover bg-surface" />
+                  <Img sizes="48px" name={l.image} alt="" className="w-12 h-12 rounded-lg object-cover bg-surface" />
                   <span className="flex-1 min-w-0 text-sm font-medium line-clamp-2">{l.name}</span>
                   <span className="text-sm text-slate num">×{l.qty}</span>
                   <span className="text-sm font-semibold num w-20 text-right">{money(l.price * l.qty)}</span>
@@ -259,43 +337,30 @@ export function Orders() {
 /* ---------- coupons ---------- */
 export function Coupons() {
   const { seller } = useSelector((s) => s.seller);
-  const { products } = useCatalog();
-  const mine = products.filter((p) => p.shopId === seller._id);
-  const [coupons, setCoupons] = useState(null);
+  const { data: mine = [] } = useGetSellerProductsQuery(seller._id);
+  const { data: coupons } = useGetCouponsQuery(seller._id);
+  const [createCoupon, { isLoading: busy }] = useCreateCouponMutation();
+  const [deleteCoupon] = useDeleteCouponMutation();
   const [open, setOpen] = useState(false);
   const [form, setForm] = useState({ name: "", value: "10", minAmount: "", maxAmount: "", selectedProduct: "" });
-  const [busy, setBusy] = useState(false);
-
-  const load = useCallback(
-    () => api.get(`/coupon/get-coupon/${seller._id}`).then(({ data }) => setCoupons(data.couponCodes)).catch((e) => toast.error(errMsg(e))),
-    [seller._id]
-  );
-  useEffect(() => {
-    load();
-  }, [load]);
 
   const create = async (e) => {
     e.preventDefault();
-    setBusy(true);
     try {
-      await api.post("/coupon/create-coupon-code", form);
+      await createCoupon(form).unwrap();
       toast.success("Coupon created");
       setOpen(false);
       setForm({ name: "", value: "10", minAmount: "", maxAmount: "", selectedProduct: "" });
-      load();
     } catch (err) {
       toast.error(errMsg(err));
-    } finally {
-      setBusy(false);
     }
   };
 
   const remove = async (c) => {
     if (!window.confirm(`Delete coupon ${c.name}?`)) return;
     try {
-      await api.delete(`/coupon/delete-coupon/${c._id}`);
+      await deleteCoupon(c._id).unwrap();
       toast.success("Coupon deleted");
-      load();
     } catch (err) {
       toast.error(errMsg(err));
     }
@@ -379,6 +444,7 @@ export function Settings() {
     try {
       const { data } = await api.put("/shop/update-seller-info", form);
       dispatch(setSeller(data.shop));
+      dispatch(vzApi.util.invalidateTags(["Shops", "Catalog", "Events", "Item"]));
       toast.success("Shop updated");
     } catch (err) {
       toast.error(errMsg(err));
@@ -395,6 +461,7 @@ export function Settings() {
       body.append("image", file);
       const { data } = await api.put("/shop/update-shop-avatar", body);
       dispatch(setSeller(data.shop));
+      dispatch(vzApi.util.invalidateTags(["Shops", "Catalog", "Events", "Item"]));
       toast.success("Logo updated");
     } catch (err) {
       toast.error(errMsg(err));
@@ -409,7 +476,7 @@ export function Settings() {
       <div className="card p-6">
         <div className="flex items-center gap-5 mb-6">
           <div className="relative">
-            <Img name={seller.avatar} alt="" className="w-20 h-20 rounded-2xl object-cover bg-surface" />
+            <Img sizes="80px" name={seller.avatar} alt="" className="w-20 h-20 rounded-2xl object-cover bg-surface" />
             <button onClick={() => input.current?.click()} disabled={logoBusy} className="absolute -bottom-1 -right-1 w-8 h-8 rounded-full bg-ink text-white grid place-items-center border-2 border-white" aria-label="Change logo">
               {logoBusy ? <Spinner className="w-4 h-4" /> : <FiCamera size={14} />}
             </button>

@@ -2,7 +2,8 @@ import { useState } from "react";
 import { FiZap } from "react-icons/fi";
 import { Breadcrumbs, Empty } from "../components/ui/primitives";
 import { EventCard } from "../components/product/Cards";
-import { useCatalog, useTitle } from "../lib/hooks";
+import { useTitle } from "../lib/hooks";
+import { useGetEventsQuery } from "../store/api";
 
 const TABS = [
   ["Running", "Live now"],
@@ -12,12 +13,11 @@ const TABS = [
 
 export default function Events() {
   useTitle("Live sales");
-  const { events, status } = useCatalog();
+  const { data: events = [], isLoading: loading } = useGetEventsQuery();
   const [tab, setTab] = useState("Running");
 
   const counts = Object.fromEntries(TABS.map(([k]) => [k, events.filter((e) => e.status === k).length]));
   const list = events.filter((e) => e.status === tab);
-  const loading = status === "idle" || status === "loading";
 
   return (
     <div className="container-x">

@@ -50,20 +50,19 @@ function CheckoutForm() {
   const items = cart.active.map((l) => ({ _id: l._id, qty: l.qty }));
   const itemsKey = JSON.stringify(items);
 
-  // ask the server for the real totals whenever the cart or coupon changes
+  // ask the server for the real totals whenever the cart or coupon changes; a newer
+  // change aborts the request still in flight for the older one
   useEffect(() => {
     if (!items.length) return;
-    let live = true;
+    const ctrl = new AbortController();
     api
-      .post("/order/quote", { cart: items, couponCode: coupon })
+      .post("/order/quote", { cart: items, couponCode: coupon }, { signal: ctrl.signal })
       .then(({ data }) => {
-        if (live) {
-          setQuote(data.summary);
-          setQuoteError("");
-        }
+        setQuote(data.summary);
+        setQuoteError("");
       })
       .catch((e) => {
-        if (!live) return;
+        if (ctrl.signal.aborted) return;
         if (coupon) {
           toast.error(errMsg(e));
           setCoupon("");
@@ -71,9 +70,7 @@ function CheckoutForm() {
           setQuoteError(errMsg(e));
         }
       });
-    return () => {
-      live = false;
-    };
+    return () => ctrl.abort();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [itemsKey, coupon]);
 
@@ -229,7 +226,7 @@ function CheckoutForm() {
           {cart.active.map((l) => (
             <li key={l._id} className="flex gap-3 py-3 first:pt-0">
               <div className="relative">
-                <Img name={l.image} alt="" className="w-14 h-14 rounded-lg object-cover bg-surface" />
+                <Img sizes="56px" name={l.image} alt="" className="w-14 h-14 rounded-lg object-cover bg-surface" />
                 <span className="absolute -top-1.5 -right-1.5 min-w-[20px] h-5 px-1 rounded-full bg-ink text-white text-[11px] font-bold grid place-items-center num">{l.qty}</span>
               </div>
               <div className="min-w-0 flex-1">

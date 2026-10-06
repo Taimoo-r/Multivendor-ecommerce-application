@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Link, NavLink, useLocation, useNavigate, useSearchParams } from "react-router-dom";
 import { useDispatch, useSelector } from "react-redux";
 import toast from "react-hot-toast";
@@ -17,7 +17,8 @@ import {
 import { Drawer, Img } from "../ui/primitives";
 import { CATEGORIES, CATEGORY_SHORT } from "../../lib/constants";
 import { money } from "../../lib/format";
-import { useCart, useCatalog, useDebounced } from "../../lib/hooks";
+import { useCart, useDebounced } from "../../lib/hooks";
+import { useGetEventsQuery, useLazySearchProductsQuery } from "../../store/api";
 import { openCart } from "../../store/cart";
 import { logoutUser } from "../../store/auth";
 
@@ -38,27 +39,27 @@ export const Logo = ({ light = false, className = "" }) => (
 const SearchBox = ({ autoFocus = false, onDone }) => {
   const navigate = useNavigate();
   const [params] = useSearchParams();
-  const { products } = useCatalog();
   const [q, setQ] = useState(params.get("q") || "");
   const [open, setOpen] = useState(false);
   const box = useRef(null);
-  const dq = useDebounced(q, 120);
+
+  // Server-side suggestions. Debounced, so typing "headphones" sends one or two requests
+  // instead of ten, and each new term aborts the request for the previous one, so a slow
+  // older response can never overwrite a newer one.
+  const dq = useDebounced(q.trim(), 250);
+  const [search, { data, isFetching }] = useLazySearchProductsQuery();
+  useEffect(() => {
+    if (dq.length < 2) return;
+    const req = search({ q: dq, limit: 6 }, true); // true: reuse a cached result for this term
+    return () => req.abort();
+  }, [dq, search]);
+  const matches = dq.length >= 2 ? data?.products || [] : [];
 
   useEffect(() => {
     const away = (e) => box.current && !box.current.contains(e.target) && setOpen(false);
     document.addEventListener("mousedown", away);
     return () => document.removeEventListener("mousedown", away);
   }, []);
-
-  const matches = useMemo(() => {
-    const term = dq.trim().toLowerCase();
-    if (term.length < 2) return [];
-    return products
-      .filter((p) =>
-        [p.name, p.category, p.tags, p.shop?.name].some((f) => f && f.toLowerCase().includes(term))
-      )
-      .slice(0, 6);
-  }, [dq, products]);
 
   const submit = (e) => {
     e?.preventDefault();
@@ -91,7 +92,9 @@ const SearchBox = ({ autoFocus = false, onDone }) => {
       {open && q.trim().length >= 2 && (
         <div className="absolute z-50 left-0 right-0 top-[calc(100%+6px)] bg-white border border-line rounded-xl shadow-[0_12px_32px_-12px_rgba(10,26,28,.25)] overflow-hidden anim-pop">
           {matches.length === 0 ? (
-            <p className="px-4 py-5 text-sm text-slate">No matches for "{q.trim()}"</p>
+            <p className="px-4 py-5 text-sm text-slate">
+              {isFetching || dq !== q.trim() ? "Searching…" : `No matches for "${q.trim()}"`}
+            </p>
           ) : (
             <>
               <ul>
@@ -105,7 +108,7 @@ const SearchBox = ({ autoFocus = false, onDone }) => {
                       }}
                       className="flex items-center gap-3 px-3 py-2.5 hover:bg-surface"
                     >
-                      <Img name={p.images?.[0]} alt="" className="w-11 h-11 rounded-lg object-cover bg-surface shrink-0" />
+                      <Img name={p.images?.[0]} alt="" sizes="44px" className="w-11 h-11 rounded-lg object-cover bg-surface shrink-0" />
                       <span className="min-w-0 flex-1">
                         <span className="block text-sm font-medium truncate">{p.name}</span>
                         <span className="block text-xs text-muted truncate">{p.category}</span>
@@ -169,7 +172,7 @@ const AccountMenu = () => {
         aria-expanded={open}
         aria-haspopup="menu"
       >
-        <Img name={user.avatar} alt="" className="w-8 h-8 rounded-full object-cover bg-surface" />
+        <Img name={user.avatar} alt="" sizes="32px" className="w-8 h-8 rounded-full object-cover bg-surface" />
         <span className="hidden md:block text-left leading-tight">
           <span className="block text-[11px] text-muted">Hello</span>
           <span className="block text-sm font-semibold max-w-[96px] truncate">{user.name.split(" ")[0]}</span>
@@ -212,7 +215,7 @@ export default function Header() {
   const cart = useCart();
   const wishCount = useSelector((s) => s.wishlist.ids.length);
   const { seller } = useSelector((s) => s.seller);
-  const { events } = useCatalog();
+  const { data: events = [] } = useGetEventsQuery();
   const [menu, setMenu] = useState(false);
   const [mobileSearch, setMobileSearch] = useState(false);
   const [mega, setMega] = useState(false);

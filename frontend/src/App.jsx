@@ -20,7 +20,6 @@ import {
   Signup,
 } from "./pages/auth/Auth";
 import { PageLoader } from "./components/ui/primitives";
-import { fetchCatalog } from "./store/catalog";
 import { loadSeller, loadUser } from "./store/auth";
 
 // heavy, signed-in-only areas load on demand
@@ -35,7 +34,6 @@ export default function App() {
   useEffect(() => {
     dispatch(loadUser());
     dispatch(loadSeller());
-    dispatch(fetchCatalog());
   }, [dispatch]);
 
   return (

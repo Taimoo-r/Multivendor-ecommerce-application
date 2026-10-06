@@ -196,7 +196,7 @@ export function Signup() {
 
   const submit = async (e) => {
     e.preventDefault();
-    if (form.password.length < 6) return toast.error("Password must be at least 6 characters");
+    if (form.password.length < 8) return toast.error("Password must be at least 8 characters");
     setBusy(true);
     try {
       const body = new FormData();
@@ -230,7 +230,7 @@ export function Signup() {
           <Field label="Email" id="email">
             <input id="email" type="email" required value={form.email} onChange={set("email")} autoComplete="email" className="field" />
           </Field>
-          <Field label="Password" id="password" hint="At least 6 characters">
+          <Field label="Password" id="password" hint="At least 8 characters">
             <PasswordInput id="password" value={form.password} onChange={set("password")} autoComplete="new-password" />
           </Field>
           <Submit busy={busy}>Create account</Submit>
@@ -349,7 +349,7 @@ export function ResetPassword({ type = "user" }) {
 
   const submit = async (e) => {
     e.preventDefault();
-    if (password.length < 6) return toast.error("Password must be at least 6 characters");
+    if (password.length < 8) return toast.error("Password must be at least 8 characters");
     if (password !== confirm) return toast.error("Passwords don't match");
     setBusy(true);
     try {
@@ -373,7 +373,7 @@ export function ResetPassword({ type = "user" }) {
         </div>
       ) : (
         <form onSubmit={submit} className="space-y-4">
-          <Field label="New password" id="password" hint="At least 6 characters">
+          <Field label="New password" id="password" hint="At least 8 characters">
             <PasswordInput id="password" value={password} onChange={(e) => setPassword(e.target.value)} autoComplete="new-password" />
           </Field>
           <Field label="Confirm password" id="confirm">
@@ -456,7 +456,7 @@ export function ShopCreate() {
   const submit = async (e) => {
     e.preventDefault();
     if (!file) return toast.error("Please add a shop logo");
-    if (form.password.length < 6) return toast.error("Password must be at least 6 characters");
+    if (form.password.length < 8) return toast.error("Password must be at least 8 characters");
     setBusy(true);
     try {
       const body = new FormData();
@@ -490,7 +490,7 @@ export function ShopCreate() {
             <Field label="Postal code" id="zip"><input id="zip" required inputMode="numeric" value={form.zipCode} onChange={set("zipCode")} autoComplete="postal-code" className="field num" /></Field>
           </div>
           <Field label="Address" id="address"><input id="address" required value={form.address} onChange={set("address")} autoComplete="street-address" className="field" /></Field>
-          <Field label="Password" id="password" hint="At least 6 characters">
+          <Field label="Password" id="password" hint="At least 8 characters">
             <PasswordInput id="password" value={form.password} onChange={set("password")} autoComplete="new-password" />
           </Field>
           <Submit busy={busy}>Create shop</Submit>

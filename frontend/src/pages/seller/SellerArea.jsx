@@ -78,7 +78,7 @@ export default function SellerArea() {
               View my shop <FiExternalLink size={14} />
             </Link>
             <div className="flex items-center gap-2.5">
-              <Img name={seller.avatar} alt="" className="w-9 h-9 rounded-lg object-cover bg-surface" />
+              <Img sizes="36px" name={seller.avatar} alt="" className="w-9 h-9 rounded-lg object-cover bg-surface" />
               <span className="hidden md:block text-sm font-semibold max-w-[160px] truncate">{seller.name}</span>
             </div>
             <button onClick={logout} className="btn btn-ghost btn-sm" aria-label="Sign out"><FiLogOut size={16} /> <span className="hidden sm:inline">Sign out</span></button>
