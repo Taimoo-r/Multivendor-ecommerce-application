@@ -1,0 +1,26 @@
+{
+ "banner-audio.jpg": {
+  "photographer": "Daniele Franchi",
+  "source": "https://unsplash.com/photos/black-headphones-on-red-surface--xbz_WB4hp8"
+ },
+ "banner-home.jpg": {
+  "photographer": "Collov Home Design",
+  "source": "https://unsplash.com/photos/living-room-with-white-sofa-and-art-js8AQlw71HA"
+ },
+ "banner-outdoor.jpg": {
+  "photographer": "Patrick Hendry",
+  "source": "https://unsplash.com/photos/woman-and-a-dog-inside-outdoor-tent-near-body-of-water-eDgUyGu93Yw"
+ },
+ "banner-coffee.jpg": {
+  "photographer": "Jessica Lewis \ud83e\udd8b thepaintedsquare",
+  "source": "https://unsplash.com/photos/filled-white-teacup-BZw2fWK-9lo"
+ },
+ "banner-tech.jpg": {
+  "photographer": "Howard Bouchevereau",
+  "source": "https://unsplash.com/photos/black-flat-screen-computer-monitor-on-brown-wooden-desk-Ql4Y26OsEoY"
+ },
+ "banner-fashion.jpg": {
+  "photographer": "Amanda Vick",
+  "source": "https://unsplash.com/photos/one-cowboy-hat-and-five-jackets-hanged-on-clothes-rack-ohWf6YuzOQk"
+ }
+}

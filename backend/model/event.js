@@ -62,4 +62,7 @@ const eventSchema = new mongoose.Schema({
   },
 });
 
+eventSchema.index({ Finish_Date: 1 });
+eventSchema.index({ shopId: 1, Finish_Date: 1 });
+
 module.exports = mongoose.model("Event", eventSchema);

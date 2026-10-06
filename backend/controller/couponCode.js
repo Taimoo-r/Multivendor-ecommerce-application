@@ -1,87 +1,77 @@
 const express = require("express");
 const catchAsyncError = require("../middleware/catchAsyncErrors");
 const router = express.Router();
+const validate = require("../middleware/validate");
+const { limits } = require("../middleware/rateLimit");
+const schemas = require("../validation/schemas").coupon;
 const CouponCode = require("../model/couponCode");
 const ErrorHandler = require("../utils/ErrorHandler");
 const { isSeller } = require("../middleware/auth");
 
-//Create coupon code
+// Create coupon code (for the signed-in shop)
+// minAmount = minimum eligible spend, maxAmount = cap on the discount given
 router.post(
   "/create-coupon-code",
   isSeller,
+  limits.sellerWrite,
+  validate(schemas.create),
   catchAsyncError(async (req, res, next) => {
-    try {
-      const isCouponCodeExist = await CouponCode.find({
-        name: req.body.name,
-      });
-
-      if (isCouponCodeExist.length !== 0) {
-        return next(new ErrorHandler("Coupon code already exists!", 400));
-      }
-      const couponCode = await CouponCode.create(req.body);
-
-      res.status(201).json({
-        success: true,
-        couponCode,
-      });
-    } catch (error) {
-      return next(new ErrorHandler(error.message, 400));
+    const { name, value, minAmount, maxAmount, selectedProduct } = req.body;
+    const code = name.toUpperCase();
+    if (await CouponCode.exists({ name: code })) {
+      return next(new ErrorHandler("That coupon code already exists", 409, { code: "DUPLICATE" }));
     }
+    const couponCode = await CouponCode.create({
+      name: code,
+      value,
+      minAmount,
+      maxAmount,
+      selectedProduct: selectedProduct || undefined,
+      shopId: String(req.seller._id),
+    });
+    res.status(201).json({ success: true, couponCode });
   })
 );
 
-// get all coupons of a shop
+// Coupons of the signed-in shop (the :id is kept for old clients and ignored)
 router.get(
   "/get-coupon/:id",
   isSeller,
-  catchAsyncError(async (req, res, next) => {
-    try {
-      const couponCodes = await CouponCode.find({ shopId: req.seller.id });
-      res.status(201).json({
-        success: true,
-        couponCodes,
-      });
-    } catch (error) {
-      return next(new ErrorHandler(error, 400));
-    }
+  catchAsyncError(async (req, res) => {
+    const couponCodes = await CouponCode.find({ shopId: String(req.seller._id) })
+      .sort({ createdAt: -1 })
+      .lean();
+    res.status(200).json({ success: true, couponCodes });
   })
 );
 
-// delete coupoun code of a shop
+// Delete a coupon of the signed-in shop
 router.delete(
   "/delete-coupon/:id",
   isSeller,
+  limits.sellerWrite,
+  validate(schemas.idParam),
   catchAsyncError(async (req, res, next) => {
-    try {
-      const couponCode = await CouponCode.findByIdAndDelete(req.params.id);
-
-      if (!couponCode) {
-        return next(new ErrorHandler("Coupon code dosen't exists!", 400));
-      }
-      res.status(201).json({
-        success: true,
-        message: "Coupon code deleted successfully!",
-      });
-    } catch (error) {
-      return next(new ErrorHandler(error, 400));
-    }
+    const couponCode = await CouponCode.findOneAndDelete({
+      _id: req.params.id,
+      shopId: String(req.seller._id),
+    });
+    if (!couponCode) return next(new ErrorHandler("Coupon code doesn't exist", 404));
+    res.status(200).json({ success: true, message: "Coupon code deleted" });
   })
 );
 
-// get coupon code value by its name
+// Look up a coupon by name (checkout). Rate limited per IP so codes can't be enumerated.
 router.get(
   "/get-coupon-value/:name",
-  catchAsyncError(async (req, res, next) => {
-    try {
-      const couponCode = await CouponCode.findOne({ name: req.params.name });
-
-      res.status(200).json({
-        success: true,
-        couponCode,
-      });
-    } catch (error) {
-      return next(new ErrorHandler(error, 400));
-    }
+  limits.couponLookup,
+  validate(schemas.nameParam),
+  catchAsyncError(async (req, res) => {
+    const couponCode = await CouponCode.findOne(
+      { name: req.params.name.toUpperCase() },
+      { name: 1, value: 1, minAmount: 1, maxAmount: 1, selectedProduct: 1, shopId: 1 }
+    ).lean();
+    res.status(200).json({ success: true, couponCode });
   })
 );
 

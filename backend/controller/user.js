@@ -1,141 +1,154 @@
 const express = require("express");
-const path = require("path");
-const User = require("../model/User");
+const bcrypt = require("bcryptjs");
+const jwt = require("jsonwebtoken");
 const router = express.Router();
+const User = require("../model/User");
 const { upload } = require("../multer");
 const ErrorHandler = require("../utils/ErrorHandler");
-const fs = require("fs");
-const jwt = require("jsonwebtoken");
 const catchAsyncError = require("../middleware/catchAsyncErrors");
+const validate = require("../middleware/validate");
+const { limits } = require("../middleware/rateLimit");
+const schemas = require("../validation/schemas").user;
 const sendMail = require("../utils/sendMail");
-const sendToken = require("../utils/jwtToken");
 const { isAuthenticated } = require("../middleware/auth");
+const passwordResetHandlers = require("../utils/passwordReset");
+const { verifyImages, queueVariants } = require("../utils/images");
+const { removeImage } = require("../utils/catalog");
+const { discardOnError } = require("./product");
+const session = require("../utils/session");
 
-// Create user
-router.post("/create-user", upload.single("file"), async (req, res, next) => {
-  try {
+const DEFAULT_AVATAR = "default-avatar.jpg";
+const KIND = "user";
+
+const removeAvatar = (filename) => {
+  if (filename && filename !== DEFAULT_AVATAR) removeImage(filename);
+};
+
+const safeUser = (user) => {
+  const o = user.toObject ? user.toObject() : { ...user };
+  delete o.password;
+  delete o.resetPasswordToken;
+  delete o.resetPasswordTime;
+  return o;
+};
+
+const signIn = async (req, res, user, status = 200) => {
+  await session.startSession(req, res, KIND, user._id);
+  res.status(status).json({ success: true, user: safeUser(user) });
+};
+
+// The activation link carries the account details, with the password already hashed.
+const createActivationToken = (user) =>
+  jwt.sign(user, process.env.ACTIVATION_SECRET, { expiresIn: process.env.ACTIVATION_EXPIRES });
+
+// Create user (sends an activation email)
+router.post(
+  "/create-user",
+  limits.signup,
+  discardOnError,
+  upload.single("file"),
+  verifyImages,
+  validate(schemas.register),
+  catchAsyncError(async (req, res, next) => {
     const { name, email, password } = req.body;
-    const userEmail = await User.findOne({ email });
-    if (userEmail) {
-      const filename = req.file.filename;
-      const filePath = `uploads/${filename}`;
-      fs.unlink(filePath, (err) => {
-        if (err) {
-          console.log(err);
-          res.status(500).json({ message: "Error deleting file" });
-        }
-      });
-      return next(new ErrorHandler("User already exist", 400));
+    if (await User.exists({ email })) {
+      return next(new ErrorHandler("An account with this email already exists", 409, { code: "DUPLICATE" }));
     }
 
-    const filename = req.file.filename;
-    const fileUrl = path.join(filename);
-
     const user = {
-      name: name,
-      email: email,
-      password: password,
-      avatar: fileUrl,
+      name,
+      email,
+      password: await bcrypt.hash(password, 10),
+      avatar: req.file ? req.file.filename : DEFAULT_AVATAR,
     };
-
-    const activationToken = createActivationToken(user);
-    const activationUrl = `http://localhost:5173/activation/${activationToken}`;
+    const frontendUrl = process.env.FRONTEND_URL || "http://localhost:5173";
+    const activationUrl = `${frontendUrl}/activation/${createActivationToken(user)}`;
 
     try {
       await sendMail({
         email: user.email,
-        subject: "Activate Your account",
-        message: `Hello ${user.name},\n\t Please click on the link below to activate your account:\n\n${activationUrl}`,
+        subject: "Activate your VendorZone account",
+        message: `Hello ${user.name},\n\nPlease click the link below to activate your account:\n\n${activationUrl}\n\nThe link expires shortly. If you didn't sign up, you can ignore this email.`,
       });
-      res.status(201).json({
-        success: true,
-        message: `Please check your email:-\n\t${user.email} to activate your account`,
-      });
-    } catch (error) {
-      return next(new ErrorHandler(error.message, 500));
+    } catch {
+      return next(new ErrorHandler("Could not send the activation email", 500));
     }
-  } catch (error) {
-    return next(new ErrorHandler(error.message, 400));
-  }
-});
-
-// Create activation Token
-const createActivationToken = (user) => {
-    console.log(process.env.ACTIVATION_EXPIRES)
-  return jwt.sign(user, process.env.ACTIVATION_SECRET, {
-    expiresIn: process.env.ACTIVATION_EXPIRES,
-  });
-}; 
-
-// Activate User
-router.post(
-  "/activation",
-  catchAsyncError(async (req, res, next) => {
-    console.log("Here 1")
-    try {
-      const { activation_token } = req.body;
-      const newUser = jwt.verify(
-        activation_token,
-        process.env.ACTIVATION_SECRET
-      );
-
-      console.log("Here")
-      if (!newUser) {
-        return next(new ErrorHandler("Invalid token", 400));
-      }
-
-      const { name, email, password, avatar } = newUser;
-      
-
-      let user = await User.findOne({ email });
-
-      if (user) {
-        return next(new ErrorHandler("User already exists", 400));
-      }
-
-      console.log("Already User is : ", user);
-
-      user = await User.create({
-        name,
-        email,
-        password,
-        avatar,
-      });
-
-      // Save the user to the database
-      console.log(await user.save());
-
-      sendToken(user, 201, res);
-    } catch (error) {
-      return next(new ErrorHandler(error.message, 500));
-    }
+    if (req.file) queueVariants([req.file.filename]);
+    res.status(201).json({
+      success: true,
+      message: `Please check your email (${user.email}) to activate your account`,
+    });
   })
 );
 
-// // Login user
+// Activate user
+router.post(
+  "/activation",
+  limits.tokenLink,
+  validate(schemas.activation),
+  catchAsyncError(async (req, res, next) => {
+    const { name, email, password, avatar } = jwt.verify(
+      req.body.activation_token,
+      process.env.ACTIVATION_SECRET
+    );
+    if (await User.exists({ email })) {
+      return next(new ErrorHandler("This account is already activated", 409, { code: "DUPLICATE" }));
+    }
+    const user = new User({ name, email, password, avatar });
+    user.$locals.passwordHashed = true; // already hashed in create-user
+    await user.save();
+    await signIn(req, res, user, 201);
+  })
+);
+
+// Forgot / reset password. A reset signs out every session.
+const userReset = passwordResetHandlers(User, {
+  resetPath: "/reset-password",
+  onReset: (account) => session.revokeAll(KIND, account._id),
+});
+router.post(
+  "/forgot-password",
+  limits.forgotIp,
+  validate(schemas.forgot),
+  limits.forgotEmail,
+  catchAsyncError(userReset.forgot)
+);
+router.post(
+  "/reset-password/:token",
+  limits.tokenLink,
+  validate(schemas.reset),
+  catchAsyncError(userReset.reset)
+);
+
+// Login user. Failed attempts are counted per IP + email and slowed down progressively.
 router.post(
   "/login-user",
+  limits.loginIp,
+  validate(schemas.login),
+  limits.loginFailures,
   catchAsyncError(async (req, res, next) => {
-    try {
-      const { email, password } = req.body;
-      if (!email || !password) {
-        return next(new ErrorHandler("Please provide all fields!", 400));
-      }
-
-      const user = await User.findOne({ email }).select("+password");
-      if (!user) {
-        return next(new ErrorHandler("User does not exist", 400));
-      }
-
-      const isPasswordValid = await user.comparePassword(password);
-      if (!isPasswordValid) {
-        return next(new ErrorHandler("Please provide valid credentials", 400));
-      }
-
-      sendToken(user, 201, res);
-    } catch (error) {
-      return next(new ErrorHandler(error.message, 500));
+    const { email, password } = req.body;
+    const user = await User.findOne({ email }).select("+password");
+    if (!user || !(await user.comparePassword(password))) {
+      return next(new ErrorHandler("Incorrect email or password", 401, { code: "BAD_CREDENTIALS" }));
     }
+    await signIn(req, res, user);
+  })
+);
+
+// Exchange the refresh cookie for a new access token (and a rotated refresh token).
+router.post(
+  "/refresh",
+  limits.refresh,
+  catchAsyncError(async (req, res, next) => {
+    const result = await session.rotate(req, res, KIND);
+    if (!result.ok) {
+      session.clearCookies(res, KIND);
+      const message =
+        result.code === "REFRESH_REUSED" ? "For your security you have been signed out" : "Please login to continue";
+      return next(new ErrorHandler(message, 401, { code: result.code, scope: KIND }));
+    }
+    res.status(200).json({ success: true });
   })
 );
 
@@ -143,268 +156,127 @@ router.post(
 router.get(
   "/load-user",
   isAuthenticated,
-  catchAsyncError(async (req, res, next) => {
-    try {
-      const user = await User.findById(req.user.id);
-      if (!user) {
-        return next(new ErrorHandler("User does not exist", 400));
-      }
-
-      res.status(200).json({
-        success: true,
-        user,
-      });
-    } catch (error) {
-      return next(new ErrorHandler(error.message, 500));
-    }
+  catchAsyncError(async (req, res) => {
+    res.status(200).json({ success: true, user: safeUser(req.user) });
   })
 );
 
-// Logout user
-// router.get(
-//   "/logout",
-//   isAuthenticated,
-//   catchAsyncError(async (req, res, next) => {
-//     try {
-//       res.cookie("token", null, {
-//         expires: new Date(Date.now()),
-//         httpOnly: true,
-//         sameSite: "none",
-//         secure: true,
-//       });
-//       res.status(201).json({
-//         success: true,
-//         message: "Logout Successfully!",
-//       });
-//     } catch (error) {
-//       return next(new ErrorHandler(error.message, 500));
-//     }
-//   })
-// );
+// Logout: revokes this session server-side, so neither token works afterwards.
+// POST so a cross-site <img src> can't sign people out.
+router.post(
+  "/logout",
+  catchAsyncError(async (req, res) => {
+    const sid = await session.currentSessionId(req, KIND);
+    if (sid) await session.revokeSession(sid);
+    session.clearCookies(res, KIND);
+    res.status(200).json({ success: true, message: "Logged out" });
+  })
+);
 
-// //update user Info
-// router.put(
-//   "/update-user-info",
-//   isAuthenticated,
-//   catchAsyncError(async (req, res, next) => {
-//     try {
-//       const { name, email, phoneNumber, password } = req.body;
+// Update profile details. Changing the email requires the current password.
+router.put(
+  "/update-user-info",
+  isAuthenticated,
+  validate(schemas.updateInfo),
+  catchAsyncError(async (req, res, next) => {
+    const { name, email, phoneNumber, password } = req.body;
+    const user = await User.findById(req.user._id).select("+password");
 
-//       const user = await User.findOne({ email }).select("+password");
-//       if (!user) {
-//         return next(new ErrorHandler("User does not exist", 400));
-//       }
+    if (name !== undefined) user.name = name;
+    if (phoneNumber !== undefined) user.phoneNumber = phoneNumber === "" ? undefined : Number(phoneNumber);
 
-//       const isPasswordValid = await user.comparePassword(password);
-//       if (!isPasswordValid) {
-//         return next(new ErrorHandler("Please provide valid credentials", 400));
-//       }
+    if (email !== undefined && email !== user.email) {
+      if (!password || !(await user.comparePassword(password))) {
+        return next(new ErrorHandler("Enter your current password to change your email", 400));
+      }
+      if (await User.exists({ email })) {
+        return next(new ErrorHandler("That email is already in use", 409, { code: "DUPLICATE" }));
+      }
+      user.email = email;
+    }
 
-//       (user.name = name),
-//         (user.phoneNumber = phoneNumber),
-//         (user.email = email),
-//         await user.save();
+    await user.save();
+    res.status(200).json({ success: true, user: safeUser(user) });
+  })
+);
 
-//       res.status(201).json({
-//         success: true,
-//         user,
-//       });
-//     } catch (error) {
-//       return next(new ErrorHandler(error.message, 500));
-//     }
-//   })
-// );
+// Update avatar
+router.put(
+  "/update-avatar",
+  isAuthenticated,
+  limits.upload,
+  discardOnError,
+  upload.single("image"),
+  verifyImages,
+  catchAsyncError(async (req, res, next) => {
+    if (!req.file) return next(new ErrorHandler("Please choose an image", 400));
+    const user = await User.findById(req.user._id);
+    const previous = user.avatar;
+    user.avatar = req.file.filename;
+    await user.save();
+    queueVariants([user.avatar]);
+    removeAvatar(previous);
+    res.status(200).json({ success: true, user: safeUser(user) });
+  })
+);
 
-// // update user avatar
-// router.put(
-//   "/update-avatar",
-//   isAuthenticated,
-//   upload.single("image"),
-//   catchAsyncError(async (req, res, next) => {
-//     try {
-//       const existsUser = await User.findById(req.body.id);
-//       const existsAvatarPath = `uploads/${existsUser.avatar}`;
-//       fs.unlinkSync(existsAvatarPath);
-//       const fileUrl = path.join(req.file.filename);
-//       const user = await User.findByIdAndUpdate(req.body.id, {
-//         avatar: fileUrl,
-//       });
+// Update password. Every other session is signed out; this one stays.
+router.put(
+  "/update-user-password",
+  isAuthenticated,
+  validate(schemas.updatePassword),
+  limits.loginFailures,
+  catchAsyncError(async (req, res, next) => {
+    const { oldPassword, newPassword } = req.body;
+    const user = await User.findById(req.user._id).select("+password");
+    if (!(await user.comparePassword(oldPassword))) {
+      return next(new ErrorHandler("Your current password is incorrect", 400));
+    }
+    user.password = newPassword;
+    await user.save();
+    const signedOut = await session.revokeAll(KIND, user._id, req.sessionId);
+    res.status(200).json({ success: true, message: "Password updated", signedOut });
+  })
+);
 
-//       res.status(200).json({
-//         success: true,
-//         user,
-//       });
-//     } catch (error) {
-//       return next(new ErrorHandler(error.message, 500));
-//     }
-//   })
-// );
-
-//update user addresses
+// Add or edit a saved address
 router.put(
   "/update-user-addresses",
   isAuthenticated,
+  validate(schemas.address),
   catchAsyncError(async (req, res, next) => {
-    try {
-      const user = await User.findById(req.user.id);
+    const { _id, ...data } = req.body;
+    const user = await User.findById(req.user._id);
 
-      const sameTypeAddress = user.addresses.find(
-        (address) => address.addressType === req.body.addressType
-      );
-      if (sameTypeAddress) {
-        return next(
-          new ErrorHandler(`${addressType} address already exists!`, 400)
-        );
+    if (_id) {
+      const existing = user.addresses.id(_id);
+      if (!existing) return next(new ErrorHandler("Address not found", 404));
+      Object.assign(existing, data);
+    } else {
+      if (user.addresses.some((a) => a.addressType === data.addressType)) {
+        return next(new ErrorHandler(`You already have a ${data.addressType} address`, 400));
       }
-
-      const existsAddress = user.addresses.find(
-        (address) => address._id === req.body._id
-      );
-
-      if (existsAddress) {
-        Object.assign(existsAddress, req.body);
-      } else {
-        //add the new address to array
-        user.addresses.push(req.body);
-      }
-      await user.save();
-
-      res.status(201).json({
-        success: true,
-        user,
-      });
-    } catch (error) {
-      return next(new ErrorHandler(error.message, 500));
+      if (user.addresses.length >= 10) return next(new ErrorHandler("You can save up to 10 addresses", 400));
+      user.addresses.push(data);
     }
+    await user.save();
+    res.status(201).json({ success: true, user: safeUser(user) });
   })
 );
 
-//delete user address
+// Delete a saved address
 router.delete(
   "/delete-user-address/:id",
   isAuthenticated,
-  catchAsyncError(async (req, res, next) => {
-    try {
-      const userId = req.user._id;
-      const addressId = req.params.id;
-
-      await User.updateOne(
-        {
-          _id: userId,
-        },
-        { $pull: { addresses: { _id: addressId } } }
-      );
-
-      const user = await User.findById(userId);
-
-      res.status(200).json({ success: true, user });
-    } catch (error) {
-      return next(new ErrorHandler(error.message, 500));
-    }
+  validate(schemas.idParam),
+  catchAsyncError(async (req, res) => {
+    const user = await User.findByIdAndUpdate(
+      req.user._id,
+      { $pull: { addresses: { _id: req.params.id } } },
+      { new: true }
+    );
+    res.status(200).json({ success: true, user: safeUser(user) });
   })
 );
-
-// // update user password
-// router.put(
-//   "/update-user-password",
-//   isAuthenticated,
-//   catchAsyncError(async (req, res, next) => {
-//     try {
-//       const user = await User.findById(req.user.id).select("+password");
-
-//       const isPasswordMatched = await user.comparePassword(
-//         req.body.oldPassword
-//       );
-
-//       if (!isPasswordMatched) {
-//         return next(new ErrorHandler("Old password is incorrect!", 400));
-//       }
-
-//       if (req.body.newPassword !== req.body.confirmPassword) {
-//         return next(
-//           new ErrorHandler("Password doesn't matched with each other!", 400)
-//         );
-//       }
-//       user.password = req.body.newPassword;
-
-//       await user.save();
-
-//       res.status(200).json({
-//         success: true,
-//         message: "Password updated successfully!",
-//       });
-//     } catch (error) {
-//       return next(new ErrorHandler(error.message, 500));
-//     }
-//   })
-// );
-
-// // find user information with the userId
-// router.get(
-//   "/user-info/:id",
-//   catchAsyncError(async (req, res, next) => {
-//     try {
-//       const user = await User.findById(req.params.id);
-
-//       res.status(201).json({
-//         success: true,
-//         user,
-//       });
-//     } catch (error) {
-//       return next(new ErrorHandler(error.message, 500));
-//     }
-//   })
-// );
-
-// // all users --- for admin
-// // router.get(
-// //   "/admin-all-users",
-// //   isAuthenticated,
-// //   isAdmin("Admin"),
-// //   catchAsyncErrors(async (req, res, next) => {
-// //     try {
-// //       const users = await User.find().sort({
-// //         createdAt: -1,
-// //       });
-// //       res.status(201).json({
-// //         success: true,
-// //         users,
-// //       });
-// //     } catch (error) {
-// //       return next(new ErrorHandler(error.message, 500));
-// //     }
-// //   })
-// // );
-
-// // // delete users --- admin
-// // router.delete(
-// //   "/delete-user/:id",
-// //   isAuthenticated,
-// //   isAdmin("Admin"),
-// //   catchAsyncErrors(async (req, res, next) => {
-// //     try {
-// //       const user = await User.findById(req.params.id);
-
-// //       if (!user) {
-// //         return next(
-// //           new ErrorHandler("User is not available with this id", 400)
-// //         );
-// //       }
-
-// //       const imageId = user.avatar.public_id;
-
-// //       await cloudinary.v2.uploader.destroy(imageId);
-
-// //       await User.findByIdAndDelete(req.params.id);
-
-// //       res.status(201).json({
-// //         success: true,
-// //         message: "User deleted successfully!",
-// //       });
-// //     } catch (error) {
-// //       return next(new ErrorHandler(error.message, 500));
-// //     }
-// //   })
-// // );
 
 module.exports = router;

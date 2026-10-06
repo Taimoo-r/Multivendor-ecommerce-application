@@ -1,38 +1,33 @@
 {
   "name": "multivendor-mern-app",
   "version": "1.0.0",
-  "main": "backend/server.js",
+  "main": "server.js",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1",
     "dev": "nodemon server.js",
-    "start": "node server.js"
+    "start": "node server.js",
+    "seed": "node seed/seed.js",
+    "migrate": "node scripts/migrate.js"
   },
   "author": "Taimoor",
   "license": "ISC",
   "description": "",
   "dependencies": {
-    "@reduxjs/toolkit": "^2.9.0",
-    "axios": "^1.11.0",
-    "bcrypt": "^6.0.0",
     "bcryptjs": "^3.0.2",
-    "cloudinary": "^1.41.3",
     "cookie-parser": "^1.4.7",
     "cors": "^2.8.5",
     "dotenv": "^17.2.1",
     "express": "^5.2.1",
-    "express-fileupload": "^1.5.2",
+    "helmet": "^8.3.0",
+    "ioredis": "^6.0.0",
     "jsonwebtoken": "^9.0.2",
-    "mongodb": "3.6",
     "mongoose": "^8.18.0",
     "multer": "^2.0.2",
-    "multer-storage-cloudinary": "^4.0.0",
-    "nodemailer": "^7.0.6",
-    "nodemon": "^3.1.10",
-    "react": "^18.3.1",
-    "react-dom": "^18.3.1",
-    "react-redux": "^9.2.0",
-    "redux": "^5.0.1",
-    "redux-thunk": "^3.1.0",
-    "stripe": "^20.3.1"
+    "nodemailer": "^10.0.15",
+    "sharp": "^0.35.5",
+    "stripe": "^20.3.1",
+    "zod": "^4.6.5"
+  },
+  "devDependencies": {
+    "nodemon": "^3.1.10"
   }
 }
