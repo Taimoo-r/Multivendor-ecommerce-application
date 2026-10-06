@@ -15,7 +15,7 @@ const { discardOnError } = require("./product");
 const cache = require("../lib/cache");
 
 const PUBLIC = "public, max-age=0, s-maxage=30, stale-while-revalidate=60";
-const LIST = { reviews: 0, description: 0 };
+const LIST = { reviews: 0 };
 
 // The cache holds raw events; status is computed on every response so an event
 // never shows "Upcoming" after it started just because the list was cached.

@@ -35,7 +35,7 @@ const encodeCursor = (o) => Buffer.from(JSON.stringify({ t: o.createdAt, id: Str
 async function pageOrders(filter, q) {
   const limit = q.limit || 500;
   const match = { ...filter };
-  if (q.status) match.status = q.status;
+  if (q.status) match.status = q.status === "open" ? { $nin: ["Delivered", "Cancelled"] } : q.status;
   if (q.cursor) {
     let c;
     try {

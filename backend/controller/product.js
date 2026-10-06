@@ -217,7 +217,7 @@ router.get(
     const ids = req.q.ids;
     const light = { name: 1, images: { $slice: 2 }, discountPrice: 1, originalPrice: 1, stock: 1, shopId: 1, "shop._id": 1, "shop.name": 1, category: 1, ratings: 1 };
     const [products, events] = await Promise.all([
-      Product.find({ _id: { $in: ids } }, light).lean(),
+      Product.find({ _id: { $in: ids } }, { ...light, reviewCount: { $size: { $ifNull: ["$reviews", []] } } }).lean(),
       Event.find({ _id: { $in: ids } }, { ...light, start_Date: 1, Finish_Date: 1 }).lean(),
     ]);
     const items = [
@@ -255,9 +255,12 @@ router.get(
   "/get-all-products-shop/:id",
   validate(schemas.idParam),
   catchAsyncError(async (req, res) => {
-    const products = await Product.find({ shopId: req.params.id }, { reviews: 0 })
-      .sort({ createdAt: -1 })
-      .lean();
+    const products = await Product.aggregate([
+      { $match: { shopId: req.params.id } },
+      { $sort: { createdAt: -1 } },
+      { $addFields: { reviewCount: { $size: { $ifNull: ["$reviews", []] } } } },
+      { $project: { reviews: 0 } },
+    ]);
     res.status(200).json({ success: true, products: products.map(withPublicShop) });
   })
 );

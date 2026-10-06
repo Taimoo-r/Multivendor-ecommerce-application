@@ -199,7 +199,7 @@ const couponCode = z.string().trim().max(30).optional();
 const pageQuery = strict({
   limit: z.coerce.number().int().min(1).max(100).optional(),
   cursor: z.string().max(200).optional(),
-  status: z.enum(ORDER_STATUSES).optional(),
+  status: z.enum([...ORDER_STATUSES, "open"]).optional(), // open = not delivered or cancelled
 });
 
 const order = {
