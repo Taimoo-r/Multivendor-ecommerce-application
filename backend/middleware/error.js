@@ -14,10 +14,14 @@ module.exports = (err, req, res, next) => {
 
   // duplicate key
   if (err.code === 11000) {
-    err = new ErrorHandler(
-      `${Object.keys(err.keyValue)[0]} is already in use`,
-      400
-    );
+    const keys = Object.keys(err.keyValue || err.keyPattern || {});
+    err = keys.includes("paymentInfo.id")
+      ? new ErrorHandler("This payment was already used for an order", 409, {
+          code: "PAYMENT_ALREADY_USED",
+        })
+      : new ErrorHandler(`${keys[0] || "Value"} is already in use`, 409, {
+          code: "DUPLICATE",
+        });
   }
 
   // schema validation
@@ -26,11 +30,12 @@ module.exports = (err, req, res, next) => {
       Object.values(err.errors)
         .map((e) => e.message)
         .join(", "),
-      400
+      400,
+      { code: "VALIDATION_ERROR" }
     );
   }
 
-  // wrong / expired jwt
+  // wrong / expired jwt in emailed links (activation)
   if (err.name === "JsonWebTokenError") {
     err = new ErrorHandler("Your link is invalid, please try again", 400);
   }
@@ -46,13 +51,19 @@ module.exports = (err, req, res, next) => {
     err = new ErrorHandler(
       err.code === "LIMIT_FILE_SIZE"
         ? "Images must be 5MB or smaller"
-        : err.message,
-      400
+        : err.code === "LIMIT_FILE_COUNT" || err.code === "LIMIT_UNEXPECTED_FILE"
+          ? "Too many files"
+          : err.message,
+      400,
+      { code: "UPLOAD_REJECTED" }
     );
   }
 
-  res.status(err.statusCode).json({
-    success: false,
-    message: err.message,
-  });
+  const body = { success: false, message: err.message };
+  if (err.code && typeof err.code === "string") body.code = err.code;
+  if (err.details) body.details = err.details;
+  if (err.scope) body.scope = err.scope;
+  if (err.retryAfter) body.retryAfter = err.retryAfter;
+
+  res.status(err.statusCode).json(body);
 };
