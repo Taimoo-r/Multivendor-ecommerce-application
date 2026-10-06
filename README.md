@@ -63,6 +63,9 @@ npm install
 npm run dev                 # http://localhost:5173 (proxies /api and /uploads to :8000)
 ```
 
+Redis is optional locally: without `REDIS_URL` the cache and rate limits fall back to process
+memory. To run it: `docker run -d --name vz-redis -p 6379:6379 redis:7-alpine`.
+
 If `npm run seed` or the API fails with `querySrv ECONNREFUSED`, your DNS resolver is refusing the
 SRV lookups Atlas needs. Set `DNS_SERVERS=1.1.1.1,8.8.8.8` in `backend/.env`.
 
@@ -99,9 +102,24 @@ See `backend/.env.example`. In production the API reads its settings from the pr
 ## Deployment
 
 Production runs on a single server: Nginx serves the built frontend and proxies `/api` and `/uploads`
-to the Node API (managed by systemd); MongoDB is hosted on Atlas. Uploaded images live on the server's
-disk under `backend/uploads`.
+to the Node API (managed by systemd); MongoDB is hosted on Atlas and Redis runs on the same server.
+Uploaded images and their AVIF/WebP size variants live on the server's disk under `backend/uploads`.
 
 ```bash
 cd frontend && npm run build        # outputs frontend/dist for Nginx to serve
+cd backend && npm run migrate       # once per release: indexes, data backfills, image variants
 ```
+
+Nginx config is in `deploy/nginx/`: `vendorzone.conf` goes to `/etc/nginx/conf.d/multivendor.conf`,
+the two snippets to `/etc/nginx/`. Run `nginx -t` before reloading.
+
+### How the pieces fit
+
+| Concern | Where |
+| --- | --- |
+| Sign-in | 15-minute access JWT + rotating refresh token (`backend/utils/session.js`). Reusing an old refresh token revokes the session. The client refreshes once per tab, and tabs take turns (`frontend/src/lib/api.js`). |
+| Rate limits | Nginx per-IP leaky bucket (queues bursts) + app sliding windows in Redis per IP, email or account (`backend/middleware/rateLimit.js`) |
+| Validation | strict zod schemas per route (`backend/validation/schemas.js`) |
+| Caching | Redis cache-aside with stale-while-revalidate for catalogue reads; `X-Cache` header shows HIT/MISS/STALE (`backend/lib/cache.js`). Client side, RTK Query (`frontend/src/store/api.js`). |
+| Pagination | cursor (keyset) pages for products and orders, each sort backed by an index |
+| Images | uploads checked by file signature, resized to 320/640/1000 px AVIF + WebP, served with `srcset` |
