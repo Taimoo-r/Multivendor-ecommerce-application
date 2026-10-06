@@ -4,7 +4,7 @@ const ErrorHandler = require("./ErrorHandler");
 const sendMail = require("./sendMail");
 
 const RESET_WINDOW_MS = 15 * 60 * 1000;
-const MIN_PASSWORD_LENGTH = 6;
+const MIN_PASSWORD_LENGTH = 8;
 
 // Only the hash is stored, so a leaked database can't be used to reset accounts.
 const hashToken = (token) =>
@@ -15,7 +15,8 @@ const hashToken = (token) =>
 //
 // Updates go through updateOne with a pre-hashed password instead of save(), so
 // the models' pre-save hooks never run on these partial updates.
-const passwordResetHandlers = (Model, { resetPath }) => ({
+// onReset(account) runs after a successful reset, e.g. to sign out every session.
+const passwordResetHandlers = (Model, { resetPath, onReset }) => ({
   forgot: async (req, res, next) => {
     const email = String(req.body.email || "")
       .trim()
@@ -91,6 +92,7 @@ const passwordResetHandlers = (Model, { resetPath }) => ({
         $unset: { resetPasswordToken: "", resetPasswordTime: "" },
       }
     );
+    if (onReset) await onReset(account);
 
     res.status(200).json({
       success: true,
