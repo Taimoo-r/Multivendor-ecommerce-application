@@ -3,13 +3,16 @@ const mongoose = require("mongoose");
 const router = express.Router();
 const ErrorHandler = require("../utils/ErrorHandler");
 const catchAsyncErrors = require("../middleware/catchAsyncErrors");
+const validate = require("../middleware/validate");
+const { limits } = require("../middleware/rateLimit");
+const schemas = require("../validation/schemas").order;
+const cache = require("../lib/cache");
 const { isAuthenticated, isSeller } = require("../middleware/auth");
 const Order = require("../model/order");
 const Product = require("../model/product");
 const Shop = require("../model/shop");
 const Event = require("../model/event");
 const CouponCode = require("../model/couponCode");
-const { ORDER_STATUSES } = require("../model/order");
 const { priceCart, summary } = require("../utils/pricing");
 const { publicShop } = require("../utils/publicShop");
 const stripe = require("stripe")(process.env.STRIPE_SECRET_KEY);
@@ -23,12 +26,46 @@ const FORWARD = [
   "Delivered",
 ];
 
+// Stock and sold counts changed: drop the cached product pages. Lists and the home page
+// are allowed to be up to 30-60 s behind; the item page and checkout are not.
+const invalidateItems = (lines) => cache.del(...lines.map((l) => `p:item:${l.productId || l.product._id}`));
+
+// Cursor pages over an order list, newest first: ?limit=50&cursor=...
+const encodeCursor = (o) => Buffer.from(JSON.stringify({ t: o.createdAt, id: String(o._id) })).toString("base64url");
+async function pageOrders(filter, q) {
+  const limit = q.limit || 500;
+  const match = { ...filter };
+  if (q.status) match.status = q.status;
+  if (q.cursor) {
+    let c;
+    try {
+      c = JSON.parse(Buffer.from(q.cursor, "base64url").toString());
+      if (!/^[a-f\d]{24}$/i.test(c.id)) throw new Error();
+    } catch {
+      throw new ErrorHandler("Invalid page cursor", 400, { code: "VALIDATION_ERROR" });
+    }
+    const t = new Date(c.t);
+    const id = new mongoose.Types.ObjectId(c.id);
+    match.$or = [{ createdAt: { $lt: t } }, { createdAt: t, _id: { $lt: id } }];
+  }
+  const rows = await Order.find(match).sort({ createdAt: -1, _id: -1 }).limit(limit + 1).lean();
+  const more = rows.length > limit;
+  const orders = more ? rows.slice(0, limit) : rows;
+  return {
+    orders,
+    nextCursor: more ? encodeCursor(orders[orders.length - 1]) : null,
+    total: q.cursor ? null : await Order.countDocuments(match),
+  };
+}
+
 const orderRef = () =>
   `VZ-${Date.now().toString().slice(-6)}${Math.floor(Math.random() * 90 + 10)}`;
 
 // Price a cart without placing anything (cart page / checkout summary).
 router.post(
   "/quote",
+  limits.quote,
+  validate(schemas.quote),
   catchAsyncErrors(async (req, res, next) => {
     const priced = await priceCart(req.body.cart, req.body.couponCode);
     res.status(200).json({ success: true, summary: summary(priced) });
@@ -40,22 +77,14 @@ router.post(
 router.post(
   "/create-order",
   isAuthenticated,
+  limits.checkout,
+  validate(schemas.create),
   catchAsyncErrors(async (req, res, next) => {
     const { cart, shippingAddress, couponCode, paymentInfo } = req.body;
 
-    const required = ["address1", "city", "country", "zipCode"];
-    if (
-      !shippingAddress ||
-      required.some((k) => !String(shippingAddress[k] || "").trim())
-    ) {
-      return next(
-        new ErrorHandler("Please provide a complete delivery address", 400)
-      );
-    }
-
     const priced = await priceCart(cart, couponCode);
 
-    const type = paymentInfo && paymentInfo.type;
+    const type = paymentInfo.type;
     let payment;
     if (type === "Cash On Delivery") {
       payment = { type, status: "Pending" };
@@ -73,14 +102,13 @@ router.post(
       ) {
         return next(new ErrorHandler("Payment could not be verified", 400));
       }
-      if (await Order.findOne({ "paymentInfo.id": intent.id })) {
+      // fast path; the unique index on (paymentInfo.id, shopId) is the real guarantee
+      if (await Order.exists({ "paymentInfo.id": intent.id })) {
         return next(
-          new ErrorHandler("This payment was already used for an order", 400)
+          new ErrorHandler("This payment was already used for an order", 409, { code: "PAYMENT_ALREADY_USED" })
         );
       }
       payment = { id: intent.id, type, status: "Paid" };
-    } else {
-      return next(new ErrorHandler("Please choose a payment method", 400));
     }
 
     const shops = await Shop.find({
@@ -147,6 +175,7 @@ router.post(
     } finally {
       await session.endSession();
     }
+    await invalidateItems(priced.orders.flatMap((o) => o.lines));
 
     res
       .status(201)
@@ -158,14 +187,13 @@ router.post(
 router.get(
   "/get-all-orders/:userId",
   isAuthenticated,
+  validate(schemas.userParam),
   catchAsyncErrors(async (req, res, next) => {
     if (String(req.user._id) !== req.params.userId) {
       return next(new ErrorHandler("Not allowed", 403));
     }
-    const orders = await Order.find({ "user._id": req.user._id }).sort({
-      createdAt: -1,
-    });
-    res.status(200).json({ success: true, orders });
+    const page = await pageOrders({ "user._id": req.user._id }, req.q);
+    res.status(200).json({ success: true, ...page });
   })
 );
 
@@ -173,14 +201,13 @@ router.get(
 router.get(
   "/get-seller-all-orders/:shopId",
   isSeller,
+  validate(schemas.shopParam),
   catchAsyncErrors(async (req, res, next) => {
     if (String(req.seller._id) !== req.params.shopId) {
       return next(new ErrorHandler("Not allowed", 403));
     }
-    const orders = await Order.find({ shopId: req.params.shopId }).sort({
-      createdAt: -1,
-    });
-    res.status(200).json({ success: true, orders });
+    const page = await pageOrders({ shopId: req.params.shopId }, req.q);
+    res.status(200).json({ success: true, ...page });
   })
 );
 
@@ -193,17 +220,17 @@ const restock = async (order) => {
       )
     )
   );
+  await invalidateItems(order.cart);
 };
 
 // Seller moves an order along its workflow (or cancels it)
 router.put(
   "/update-order-status/:id",
   isSeller,
+  limits.sellerWrite,
+  validate(schemas.status),
   catchAsyncErrors(async (req, res, next) => {
     const { status } = req.body;
-    if (!ORDER_STATUSES.includes(status)) {
-      return next(new ErrorHandler("Unknown order status", 400));
-    }
     const order = await Order.findById(req.params.id);
     if (!order || order.shopId !== String(req.seller._id)) {
       return next(new ErrorHandler("Order not found", 404));
@@ -254,6 +281,7 @@ router.put(
 router.put(
   "/cancel-order/:id",
   isAuthenticated,
+  validate(schemas.idParam),
   catchAsyncErrors(async (req, res, next) => {
     const order = await Order.findById(req.params.id);
     if (!order || String(order.user._id) !== String(req.user._id)) {
@@ -281,57 +309,60 @@ router.get(
   isSeller,
   catchAsyncErrors(async (req, res, next) => {
     const shopId = String(req.seller._id);
-    const [orders, products, events, coupons] = await Promise.all([
-      Order.find({ shopId }).sort({ createdAt: -1 }),
+    const now = new Date();
+    const since = new Date(now.getFullYear(), now.getMonth() - 5, 1);
+    // aggregated in the database instead of loading every order of the shop
+    const [byStatus, monthly, recent, products, events, coupons] = await Promise.all([
+      Order.aggregate([
+        { $match: { shopId } },
+        { $group: { _id: "$status", count: { $sum: 1 }, total: { $sum: "$totalPrice" } } },
+      ]),
+      Order.aggregate([
+        { $match: { shopId, createdAt: { $gte: since }, status: { $ne: "Cancelled" } } },
+        {
+          $group: {
+            _id: { y: { $year: "$createdAt" }, m: { $month: "$createdAt" } },
+            orders: { $sum: 1 },
+            revenue: { $sum: { $cond: [{ $eq: ["$status", "Delivered"] }, "$totalPrice", 0] } },
+          },
+        },
+      ]),
+      Order.find({ shopId }).sort({ createdAt: -1 }).limit(6).lean(),
       Product.countDocuments({ shopId }),
       Event.countDocuments({ shopId }),
       CouponCode.countDocuments({ shopId }),
     ]);
 
-    const live = orders.filter((o) => o.status !== "Cancelled");
-    const delivered = orders.filter((o) => o.status === "Delivered");
+    const status = Object.fromEntries(byStatus.map((r) => [r._id, r]));
+    const count = (...names) => names.reduce((a, n) => a + (status[n]?.count || 0), 0);
+    const round = (n) => Math.round(n * 100) / 100;
 
     // revenue per month for the last 6 months (delivered orders)
     const months = [];
-    const now = new Date();
     for (let i = 5; i >= 0; i--) {
       const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
+      const row = monthly.find((r) => r._id.y === d.getFullYear() && r._id.m === d.getMonth() + 1);
       months.push({
         key: `${d.getFullYear()}-${d.getMonth()}`,
         label: d.toLocaleString("en-US", { month: "short" }),
-        revenue: 0,
-        orders: 0,
+        revenue: round(row?.revenue || 0),
+        orders: row?.orders || 0,
       });
-    }
-    for (const o of live) {
-      const d = new Date(o.createdAt);
-      const m = months.find((x) => x.key === `${d.getFullYear()}-${d.getMonth()}`);
-      if (m) {
-        m.orders += 1;
-        if (o.status === "Delivered") m.revenue += o.totalPrice;
-      }
     }
 
     res.status(200).json({
       success: true,
       stats: {
-        revenue:
-          Math.round(delivered.reduce((a, o) => a + o.totalPrice, 0) * 100) /
-          100,
+        revenue: round(status.Delivered?.total || 0),
         balance: req.seller.availableBalance || 0,
-        orders: orders.length,
-        pending: orders.filter((o) =>
-          ["Processing", "Packed"].includes(o.status)
-        ).length,
-        delivered: delivered.length,
+        orders: byStatus.reduce((a, r) => a + r.count, 0),
+        pending: count("Processing", "Packed"),
+        delivered: count("Delivered"),
         products,
         events,
         coupons,
-        months: months.map((m) => ({
-          ...m,
-          revenue: Math.round(m.revenue * 100) / 100,
-        })),
-        recent: orders.slice(0, 6),
+        months,
+        recent,
       },
     });
   })

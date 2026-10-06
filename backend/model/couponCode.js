@@ -29,4 +29,6 @@ const couponCodeSchema = new mongoose.Schema({
   },
 });
 
+couponCodeSchema.index({ shopId: 1 });
+
 module.exports = mongoose.model("CouponCode", couponCodeSchema);

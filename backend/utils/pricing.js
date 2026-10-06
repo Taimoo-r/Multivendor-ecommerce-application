@@ -56,7 +56,7 @@ async function priceCart(items, couponName) {
   }
 
   let coupon = null;
-  const code = String(couponName || "").trim();
+  const code = String(couponName || "").trim().toUpperCase();
   if (code) {
     coupon = await CouponCode.findOne({ name: code });
     if (!coupon) throw new ErrorHandler("That coupon code doesn't exist", 400);

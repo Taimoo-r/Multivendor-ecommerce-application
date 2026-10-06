@@ -11,7 +11,12 @@ const useCustomDns = () => {
 const connectDatabase = async () => {
   useCustomDns();
   try {
-    const conn = await mongoose.connect(process.env.DB_URL);
+    // Index builds on a live collection are run deliberately (npm run migrate), not on boot.
+    const conn = await mongoose.connect(process.env.DB_URL, {
+      autoIndex: process.env.NODE_ENV !== "production",
+      maxPoolSize: 20,
+      serverSelectionTimeoutMS: 10_000,
+    });
     console.log(`MongoDB connected: ${conn.connection.host}/${conn.connection.name}`);
   } catch (err) {
     // no point serving an API without its database; let the process manager restart us

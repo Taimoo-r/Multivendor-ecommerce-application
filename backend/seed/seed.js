@@ -9,6 +9,10 @@ const mongoose = require("mongoose");
 const bcrypt = require("bcryptjs");
 require("dotenv").config({ path: path.join(__dirname, "..", ".env") });
 
+const { useCustomDns } = require("../db/Database");
+const { makeVariants } = require("../utils/images");
+const cache = require("../lib/cache");
+const { getRedis } = require("../lib/redis");
 const User = require("../model/User");
 const Shop = require("../model/shop");
 const Product = require("../model/product");
@@ -47,13 +51,15 @@ const round2 = (n) => Math.round(n * 100) / 100;
 const IMAGES = path.join(__dirname, "images");
 const UPLOADS = path.join(__dirname, "..", "uploads");
 
-function copyImages() {
+// Copies the demo images into uploads/ with their AVIF/WebP size variants.
+async function copyImages() {
   fs.mkdirSync(UPLOADS, { recursive: true });
   let n = 0;
   for (const dir of [IMAGES, path.join(IMAGES, "avatars")]) {
     for (const f of fs.readdirSync(dir)) {
       if (!/\.(jpe?g|png)$/i.test(f)) continue;
       fs.copyFileSync(path.join(dir, f), path.join(UPLOADS, f));
+      await makeVariants(f);
       n++;
     }
   }
@@ -83,10 +89,12 @@ async function main() {
   const dbArg = process.argv.indexOf("--db");
   const dbName = dbArg > -1 ? process.argv[dbArg + 1] : undefined;
   if (!process.env.DB_URL) throw new Error("DB_URL is not set (backend/.env)");
+  useCustomDns();
+  getRedis();
   await mongoose.connect(process.env.DB_URL, dbName ? { dbName } : {});
   console.log("Connected to", mongoose.connection.name);
 
-  console.log("Copied", copyImages(), "images to uploads/");
+  console.log("Copied", await copyImages(), "images (with size variants) to uploads/");
   await wipeDemoData();
 
   const passwordHash = await bcrypt.hash(data.PASSWORD, 10);
@@ -329,7 +337,10 @@ async function main() {
   console.log(`\nDemo logins (password: ${data.PASSWORD})`);
   console.log(`  Buyer : buyer@${data.DOMAIN}`);
   data.shops.forEach((s) => console.log(`  Seller: ${s.slug}@${data.DOMAIN}  (${s.name})`));
+  await cache.bump("p");
+  await cache.del("shops:all", "events:all");
   await mongoose.disconnect();
+  getRedis()?.disconnect();
 }
 
 main().catch((err) => {

@@ -16,7 +16,6 @@ const orderSchema = new mongoose.Schema({
   },
   shopId: {
     type: String,
-    index: true,
   },
   shop: {
     type: Object,
@@ -87,7 +86,14 @@ const orderSchema = new mongoose.Schema({
   },
 });
 
-orderSchema.index({ "user._id": 1 });
+orderSchema.index({ shopId: 1, createdAt: -1 });
+orderSchema.index({ "user._id": 1, createdAt: -1 });
+// One payment can fund at most one order per shop. The database enforces it, so two
+// requests replaying the same PaymentIntent cannot both create orders.
+orderSchema.index(
+  { "paymentInfo.id": 1, shopId: 1 },
+  { unique: true, partialFilterExpression: { "paymentInfo.id": { $type: "string" } } }
+);
 
 module.exports = mongoose.model("Order", orderSchema);
 module.exports.ORDER_STATUSES = ORDER_STATUSES;

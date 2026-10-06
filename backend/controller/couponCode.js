@@ -1,6 +1,9 @@
 const express = require("express");
 const catchAsyncError = require("../middleware/catchAsyncErrors");
 const router = express.Router();
+const validate = require("../middleware/validate");
+const { limits } = require("../middleware/rateLimit");
+const schemas = require("../validation/schemas").coupon;
 const CouponCode = require("../model/couponCode");
 const ErrorHandler = require("../utils/ErrorHandler");
 const { isSeller } = require("../middleware/auth");
@@ -10,23 +13,19 @@ const { isSeller } = require("../middleware/auth");
 router.post(
   "/create-coupon-code",
   isSeller,
+  limits.sellerWrite,
+  validate(schemas.create),
   catchAsyncError(async (req, res, next) => {
     const { name, value, minAmount, maxAmount, selectedProduct } = req.body;
-    if (!name || !String(name).trim()) {
-      return next(new ErrorHandler("Please enter a coupon code", 400));
-    }
-    if (!(Number(value) > 0 && Number(value) <= 90)) {
-      return next(new ErrorHandler("The discount must be between 1% and 90%", 400));
-    }
-    const code = String(name).trim().toUpperCase();
-    if (await CouponCode.findOne({ name: code })) {
-      return next(new ErrorHandler("That coupon code already exists", 400));
+    const code = name.toUpperCase();
+    if (await CouponCode.exists({ name: code })) {
+      return next(new ErrorHandler("That coupon code already exists", 409, { code: "DUPLICATE" }));
     }
     const couponCode = await CouponCode.create({
       name: code,
-      value: Number(value),
-      minAmount: minAmount ? Number(minAmount) : undefined,
-      maxAmount: maxAmount ? Number(maxAmount) : undefined,
+      value,
+      minAmount,
+      maxAmount,
       selectedProduct: selectedProduct || undefined,
       shopId: String(req.seller._id),
     });
@@ -34,14 +33,14 @@ router.post(
   })
 );
 
-// Coupons of the signed-in shop
+// Coupons of the signed-in shop (the :id is kept for old clients and ignored)
 router.get(
   "/get-coupon/:id",
   isSeller,
-  catchAsyncError(async (req, res, next) => {
-    const couponCodes = await CouponCode.find({
-      shopId: String(req.seller._id),
-    }).sort({ createdAt: -1 });
+  catchAsyncError(async (req, res) => {
+    const couponCodes = await CouponCode.find({ shopId: String(req.seller._id) })
+      .sort({ createdAt: -1 })
+      .lean();
     res.status(200).json({ success: true, couponCodes });
   })
 );
@@ -50,25 +49,28 @@ router.get(
 router.delete(
   "/delete-coupon/:id",
   isSeller,
+  limits.sellerWrite,
+  validate(schemas.idParam),
   catchAsyncError(async (req, res, next) => {
     const couponCode = await CouponCode.findOneAndDelete({
       _id: req.params.id,
       shopId: String(req.seller._id),
     });
-    if (!couponCode) {
-      return next(new ErrorHandler("Coupon code doesn't exist", 404));
-    }
+    if (!couponCode) return next(new ErrorHandler("Coupon code doesn't exist", 404));
     res.status(200).json({ success: true, message: "Coupon code deleted" });
   })
 );
 
-// Look up a coupon by name (checkout)
+// Look up a coupon by name (checkout). Rate limited per IP so codes can't be enumerated.
 router.get(
   "/get-coupon-value/:name",
-  catchAsyncError(async (req, res, next) => {
-    const couponCode = await CouponCode.findOne({
-      name: String(req.params.name).trim().toUpperCase(),
-    });
+  limits.couponLookup,
+  validate(schemas.nameParam),
+  catchAsyncError(async (req, res) => {
+    const couponCode = await CouponCode.findOne(
+      { name: req.params.name.toUpperCase() },
+      { name: 1, value: 1, minAmount: 1, maxAmount: 1, selectedProduct: 1, shopId: 1 }
+    ).lean();
     res.status(200).json({ success: true, couponCode });
   })
 );

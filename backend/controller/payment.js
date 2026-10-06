@@ -2,6 +2,9 @@ const express = require("express");
 const router = express.Router();
 const catchAsyncError = require("../middleware/catchAsyncErrors");
 const { isAuthenticated } = require("../middleware/auth");
+const validate = require("../middleware/validate");
+const { limits } = require("../middleware/rateLimit");
+const schemas = require("../validation/schemas").order;
 const { priceCart, summary } = require("../utils/pricing");
 const stripe = require("stripe")(process.env.STRIPE_SECRET_KEY);
 
@@ -10,6 +13,8 @@ const stripe = require("stripe")(process.env.STRIPE_SECRET_KEY);
 router.post(
   "/process",
   isAuthenticated,
+  limits.checkout,
+  validate(schemas.quote),
   catchAsyncError(async (req, res, next) => {
     const priced = await priceCart(req.body.cart, req.body.couponCode);
     const intent = await stripe.paymentIntents.create({
